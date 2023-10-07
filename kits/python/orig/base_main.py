@@ -3,7 +3,7 @@ from typing import Dict
 import sys
 from argparse import Namespace
 
-from agent import Agent
+from base_agent import BaseAgent
 from lux.config import EnvConfig
 from lux.kit import GameState, process_obs, to_json, from_json, process_action, obs_to_game_state
 ### DO NOT REMOVE THE FOLLOWING CODE ###
@@ -21,7 +21,7 @@ def agent_fn(observation, configurations):
     remainingOverageTime = observation.remainingOverageTime
     if step == 0:
         env_cfg = EnvConfig.from_dict(configurations["env_cfg"])
-        agent_dict[player] = Agent(player, env_cfg)
+        agent_dict[player] = BaseAgent(player, env_cfg)
         agent_prev_obs[player] = dict()
         agent = agent_dict[player]
     agent = agent_dict[player]
