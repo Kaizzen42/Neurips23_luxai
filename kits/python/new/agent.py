@@ -4,12 +4,33 @@ import numpy as np
 import math
 
 import sys
+
+move_deltas = np.array([[0, 0], [0, -1], [1, 0], [0, 1], [-1, 0]])
+
+
 class Agent():
     def __init__(self, player: str, env_cfg: EnvConfig) -> None:
         self.player = player
         self.opp_player = "player_1" if self.player == "player_0" else "player_0"
         np.random.seed(0)
         self.env_cfg: EnvConfig = env_cfg
+
+    def no_collisions_next_step(self, current_pos, direction, game_state):
+        """
+        Determines if its safe to move to the next tile without collisions.
+        Get positions of all robots from my team.
+        If their current position is on the block of interst, then return True.
+        If their next position is on the block of interst, then return True.
+        Else return False.
+        """
+        target_pos = current_pos + move_deltas[direction]
+
+        my_robots = game_state.units[self.player]
+        for robot_id, robot in my_robots.items():
+            if robot.pos[0] == target_pos[0] and robot.pos[1] == target_pos[1]:
+                return False
+        return True
+
 
     def early_setup(self, step: int, obs, remainingOverageTime: int = 60):
         if step == 0:
@@ -119,7 +140,8 @@ class Agent():
                         else:
                             direction = direction_to(unit.pos, closest_ice_tile)
                             move_cost = unit.move_cost(game_state, direction)
-                            if move_cost is not None and unit.power >= move_cost + unit.action_queue_cost(game_state):
+                            if move_cost is not None and unit.power >= move_cost + unit.action_queue_cost(game_state) \
+                                and self.no_collisions_next_step(unit.pos, direction, game_state):
                                 actions[unit_id] = [unit.move(direction, repeat=0, n=1)]
                     # else if we have enough ice, we go back to the factory and dump it.
                     elif unit.cargo.ice >= 10:
@@ -129,6 +151,7 @@ class Agent():
                                 actions[unit_id] = [unit.transfer(direction, 0, unit.cargo.ice, repeat=0, n=1)]
                         else:
                             move_cost = unit.move_cost(game_state, direction)
-                            if move_cost is not None and unit.power >= move_cost + unit.action_queue_cost(game_state):
+                            if move_cost is not None and unit.power >= move_cost + unit.action_queue_cost(game_state) \
+                                and self.no_collisions_next_step(unit.pos, direction, game_state):
                                 actions[unit_id] = [unit.move(direction, repeat=0, n=1)]
         return actions
