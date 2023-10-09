@@ -184,17 +184,20 @@ class Agent():
                 adjacent_to_factory = np.mean((closest_factory_tile - unit.pos) ** 2) <= 4
 
                 if unit.unit_type=="HEAVY":
-                    if unit.cargo.ice < 60:
+                    if unit.cargo.ice < 200:
                         ice_tile_distances = np.mean((ice_tile_locations - unit.pos) ** 2, 1)
                         closest_ice_tile = ice_tile_locations[np.argmin(ice_tile_distances)]
                         if np.all(closest_ice_tile == unit.pos):
-                            if unit.power >= unit.dig_cost(game_state) + unit.action_queue_cost(game_state):
-                                actions[unit_id] = [unit.dig(repeat=0, n=1)]
+                            if len(unit.action_queue) == 0:
+                                if unit.power >= unit.dig_cost(game_state) + unit.action_queue_cost(game_state):
+                                    actions[unit_id] = [unit.dig(repeat=10, n=1)]
+                            else:
+                                pass
                         else:
                             direction = direction_to(unit.pos, closest_ice_tile)
                             self.move_bot(direction, unit, game_state, actions)
                     # else if we have enough ice, we go back to the factory and dump it.
-                    elif unit.cargo.ice >= 60:
+                    elif unit.cargo.ice >= 200:
                         direction = direction_to(unit.pos, closest_factory_tile)
                         if adjacent_to_factory:
                             if unit.power >= unit.action_queue_cost(game_state):
