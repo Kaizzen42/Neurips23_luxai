@@ -6,7 +6,7 @@ import math, random
 import sys
 
 move_deltas = np.array([[0, 0], [0, -1], [1, 0], [0, 1], [-1, 0]])
-
+opposite_directions = {1:3,3:1,2:4,4:2,0:0}
 
 class Agent():
     def __init__(self, player: str, env_cfg: EnvConfig) -> None:
@@ -31,13 +31,15 @@ class Agent():
         my_robots = game_state.units[self.player]
         op_robots = game_state.units[self.opp_player]
         for robot_id, robot in my_robots.items():
-            if robot.pos[0] == target_pos[0] and robot.pos[1] == target_pos[1]:
-                # next_act = robot.action_queue[0]
-                # if next_act 
+            # if robot.pos[0] == target_pos[0] and robot.pos[1] == target_pos[1]:
+            #     return False
+            next_pos = self.get_next_queue_position(robot, robot.action_queue)
+            if next_pos[0] == target_pos[0] and next_pos[1] == target_pos[1]:
                 return False
         for robot_id, robot in op_robots.items():
-            if robot.pos[0] == target_pos[0] and robot.pos[1] == target_pos[1]:
-                return False                
+            next_pos = self.get_next_queue_position(robot, robot.action_queue)
+            if next_pos[0] == target_pos[0] and next_pos[1] == target_pos[1]:
+                return False
         return True
 
     def move_bot(self, direction, unit, game_state, actions):
@@ -46,10 +48,19 @@ class Agent():
             if self.no_collisions_next_step(unit.pos, direction, game_state):
                 actions[unit.unit_id] = [unit.move(direction, repeat=0, n=1)]
             else:
+                # Lets move in one of the orthogonal directions.
                 other_dirs = [0,1,2,3,4]
                 other_dirs.remove(direction)
+                opposite_dir = opposite_directions[direction]
+                other_dirs.remove(opposite_dir)
                 random_other_direction = random.choice(other_dirs)
-                actions[unit.unit_id] = [unit.move(random_other_direction, repeat=0, n=1)]
+                if self.no_collisions_next_step(unit.pos, random_other_direction, game_state):
+                    actions[unit.unit_id] = [unit.move(random_other_direction, repeat=0, n=1)]
+                else: # try moving opposite to the orthogonal direction
+                    if self.no_collisions_next_step(unit.pos, opposite_directions[random_other_direction], game_state):
+                        actions[unit.unit_id] = [unit.move(opposite_directions[random_other_direction], repeat=0, n=1)]
+                    else: # Don't move
+                        actions[unit.unit_id] = [unit.recharge(0, repeat=0, n=1)]
 
     def place_factory(self, obs, game_state, metal_per_factory, water_per_factory):
         potential_spawns = np.array(list(zip(*np.where(obs["board"]["valid_spawns_mask"] == 1))))
@@ -69,10 +80,36 @@ class Agent():
         # spawn_loc = potential_spawns[np.random.randint(0, len(potential_spawns))]
         spawn_loc = best_spawn_choice
         return dict(spawn=spawn_loc, metal=metal_per_factory, water=water_per_factory)
+    
+    def next_position(self, position: np.ndarray, direction: int):
+        if direction == 0:  # center
+            return position
+        if direction == 1:  # up
+            return np.array([position[0], position[1] - 1])
+        elif direction == 2:  # right
+            return np.array([position[0] + 1, position[1]])
+        elif direction == 3:  # down
+            return np.array([position[0], position[1] + 1])
+        elif direction == 4:  # left
+            return np.array([position[0] - 1, position[1]])
+        else:
+            print(f"Error: invalid direction in next_position {direction}", file=sys.stderr)
+            return position
+    
+    def get_next_queue_position(self, unit, action_queue):
+        if len(action_queue) == 0:
+            return unit.pos
+        else:
+            # print(f"{action_queue=}", file=sys.stderr)
+            if action_queue[0][0] == 0:
+                next_dir = action_queue[0][1]
+                return self.next_position(unit.pos, next_dir)
+            else:
+                return unit.pos
 
     def early_setup(self, step: int, obs, remainingOverageTime: int = 60):
         original_factories_to_place = 0
-        print(f"{step=}",file=sys.stderr) 
+        # print(f"{step=}",file=sys.stderr) 
         if step == 0:
             # bid 0 to not waste resources bidding and declare as the default faction
             return dict(faction="AlphaStrike", bid=0)
@@ -82,7 +119,7 @@ class Agent():
             if self.planned_factories_to_place == 0:
                 original_factories_to_place = game_state.teams[self.player].factories_to_place
                 self.planned_factories_to_place = max(original_factories_to_place // 2, 1)
-                
+                # self.planned_factories_to_place =  original_factories_to_place
                 # how much water and metal you have in your starting pool to give to new factories
                 start_water_left = game_state.teams[self.player].water
                 start_metal_left = game_state.teams[self.player].metal
@@ -98,15 +135,18 @@ class Agent():
                     {self.metal_per_factory=}", file=sys.stderr)
 
             if factories_to_place >= self.planned_factories_to_place and my_turn_to_place:
-                return self.place_factory(obs, game_state, self.metal_per_factory, self.water_per_factory)
+                water_left = game_state.teams[self.player].water
+                metal_left = game_state.teams[self.player].metal 
+                m = self.metal_per_factory
+                w = self.water_per_factory 
+                if self.metal_per_factory > metal_left:
+                    m = metal_left
+                if self.water_per_factory > water_left:
+                    w = water_left
+                return self.place_factory(obs, game_state, m, w)
             return dict()
-        # else:
-        #     factories_to_place = game_state.teams[self.player].factories_to_place
-        #     # whether it is your turn to place a factory
-        #     my_turn_to_place = my_turn_to_place_factory(game_state.teams[self.player].place_first, step)
 
-        #     if factories_to_place <= self.planned_factories_to_place and my_turn_to_place:
-        #         return self.place_factory(obs, game_state, metal_per_factory, water_per_factory)
+
 
     def act(self, step: int, obs, remainingOverageTime: int = 60):
         actions = dict()
@@ -140,7 +180,7 @@ class Agent():
             if len(factory_tiles) > 0:
                 factory_distances = np.mean((factory_tiles - unit.pos) ** 2, 1)
                 closest_factory_tile = factory_tiles[np.argmin(factory_distances)]
-                closest_factory = factory_units[np.argmin(factory_distances)]
+                # closest_factory = factory_units[np.argmin(factory_distances)]
                 adjacent_to_factory = np.mean((closest_factory_tile - unit.pos) ** 2) <= 4
 
                 if unit.unit_type=="HEAVY":
@@ -167,7 +207,7 @@ class Agent():
                 elif unit.unit_type=="LIGHT": 
                     # Send light ones to the next closest tile and heavies to the closest.
                     # If there isn't enough ice in cargo, go dig.
-                    if unit.cargo.ice < 100:
+                    if unit.cargo.ice < 50:
                         ice_tile_distances = np.mean((ice_tile_locations - unit.pos) ** 2, 1)
                         # closest_ice_tile = ice_tile_locations[np.argmin(ice_tile_distances)]
                         sorted_indices = np.argsort(ice_tile_distances)
@@ -181,7 +221,7 @@ class Agent():
                             direction = direction_to(unit.pos, next_random_closest_idx)
                             self.move_bot(direction, unit, game_state, actions)
                     # else if we have enough ice, we go back to the factory and dump it.
-                    elif unit.cargo.ice >= 100:
+                    elif unit.cargo.ice >= 50:
                         direction = direction_to(unit.pos, closest_factory_tile)
                         if adjacent_to_factory:
                             if unit.power >= unit.action_queue_cost(game_state):
