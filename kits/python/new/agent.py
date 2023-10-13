@@ -19,6 +19,9 @@ class Agent():
         self.water_per_factory = 150
         self.mining_target_map = dict() # dict to map robot to its mining target
         self.mining_target_reverse_map = dict() # dict to map mining target tile to robot id
+        self.total_original_water = 0
+        self.DROUGHT_STATE = False
+        self.DROUGHT_RECOVERY_COUNTER = 10
 
     def no_collisions_next_step(self, current_pos, direction, game_state):
         """
@@ -146,9 +149,31 @@ class Agent():
                     target_ice_pos = target_tuple
                     break
                     
-        print(f"{unit_id=}, {target_ice_pos=}",file=sys.stderr)
+        # print(f"{unit_id=}, {target_ice_pos=}",file=sys.stderr)
         return target_ice_pos
     
+    def dump_ice(self, unit_id, unit, closest_factory_tile, actions, game_state):
+        adjacent_to_factory = np.mean((closest_factory_tile - unit.pos) ** 2) <= 4
+        direction = direction_to(unit.pos, closest_factory_tile)
+        if adjacent_to_factory:
+            if unit.power >= unit.action_queue_cost(game_state):
+                actions[unit_id] = [unit.transfer(direction, 0, unit.cargo.ice, repeat=0, n=1)]
+        else:
+            self.move_bot(direction, unit, game_state, actions)    
+
+    def dig_ice(self, unit_id, unit, ice_tile_locations, actions, game_state):
+        target_ice_pos = self.get_optimal_ice_pos(unit=unit, unit_id=unit_id, ice_tile_locations=ice_tile_locations)
+        if np.all(target_ice_pos == unit.pos):
+            if len(unit.action_queue) == 0:
+                if unit.power >= unit.dig_cost(game_state) + unit.action_queue_cost(game_state):
+                    actions[unit_id] = [unit.dig(repeat=10, n=1)]
+                else:
+                    pass
+        else:
+            direction = direction_to(unit.pos, target_ice_pos)
+            self.move_bot(direction, unit, game_state, actions)
+
+
     def early_setup(self, step: int, obs, remainingOverageTime: int = 60):
         original_factories_to_place = 0
         # print(f"{step=}",file=sys.stderr) 
@@ -167,6 +192,7 @@ class Agent():
                 start_metal_left = game_state.teams[self.player].metal
                 self.water_per_factory = math.ceil(start_water_left / self.planned_factories_to_place)
                 self.metal_per_factory = math.ceil(start_metal_left / self.planned_factories_to_place)
+                self.total_original_water = start_water_left
             # factory placement period
             factories_to_place = game_state.teams[self.player].factories_to_place
             # whether it is your turn to place a factory
@@ -191,10 +217,45 @@ class Agent():
 
 
     def act(self, step: int, obs, remainingOverageTime: int = 60):
+        
+        
         actions = dict()
         game_state = obs_to_game_state(step, self.env_cfg, obs)
         factories = game_state.factories[self.player]
         game_state.teams[self.player].place_first
+        
+        if not self.DROUGHT_STATE:
+            total_water = 0
+            for unit_id, factory in factories.items():
+                total_water += factory.cargo.water
+            if total_water <= self.total_original_water / 2:
+                self.DROUGHT_STATE = True
+                # print(f"Drougt State. Returning all bots. Total water = {total_water} vs. originally allocated water = {self.total_original_water}", file=sys.stderr)
+
+
+        if self.DROUGHT_RECOVERY_COUNTER > 0:
+            self.DROUGHT_STATE = False
+            self.DROUGHT_RECOVERY_COUNTER -= 1
+        else:
+            
+            total_water = 0
+            for unit_id, factory in factories.items():
+                total_water += factory.cargo.water
+            if total_water <= self.total_original_water / 2:
+                self.DROUGHT_STATE = True
+                self.DROUGHT_RECOVERY_COUNTER = 10
+                print(f"Drougt State. Returning all bots. Total water = {total_water} vs. originally allocated water = {self.total_original_water}", file=sys.stderr)
+
+        
+        # if self.DROUGHT_STATE:
+        #     HEAVY_CARGO_TARGET = 100
+        #     LIGHT_CARGO_TARGET = 20
+        # else:
+        HEAVY_CARGO_TARGET = 200
+        LIGHT_CARGO_TARGET = 50
+
+
+
         factory_tiles, factory_units = [], []
         for unit_id, factory in factories.items():
             # Try building heavy first. If not enough power, build light.
@@ -226,48 +287,24 @@ class Agent():
                 adjacent_to_factory = np.mean((closest_factory_tile - unit.pos) ** 2) <= 4
 
                 if unit.unit_type=="HEAVY":
-                    if unit.cargo.ice < 200:
-                        target_ice_pos = self.get_optimal_ice_pos(unit=unit, unit_id=unit_id, ice_tile_locations=ice_tile_locations)
-                        if np.all(target_ice_pos == unit.pos):
-                            if len(unit.action_queue) == 0:
-                                if unit.power >= unit.dig_cost(game_state) + unit.action_queue_cost(game_state):
-                                    actions[unit_id] = [unit.dig(repeat=10, n=1)]
-                                else:
-                                    pass
-                        else:
-                            direction = direction_to(unit.pos, target_ice_pos)
-                            self.move_bot(direction, unit, game_state, actions)
-                    # else if we have enough ice, we go back to the factory and dump it.
-                    elif unit.cargo.ice >= 200:
-                        direction = direction_to(unit.pos, closest_factory_tile)
-                        if adjacent_to_factory:
-                            if unit.power >= unit.action_queue_cost(game_state):
-                                actions[unit_id] = [unit.transfer(direction, 0, unit.cargo.ice, repeat=0, n=1)]
-                        else:
-                            self.move_bot(direction, unit, game_state, actions)
-                                                
+                    if self.DROUGHT_STATE:
+                        self.dump_ice(unit_id, unit, closest_factory_tile, actions, game_state)
+                    else:    
+                        if unit.cargo.ice < HEAVY_CARGO_TARGET:
+                            self.dig_ice(unit_id, unit, ice_tile_locations, actions, game_state)
+                        # else if we have enough ice, we go back to the factory and dump it.
+                        elif unit.cargo.ice >= HEAVY_CARGO_TARGET:
+                            self.dump_ice(unit_id, unit, closest_factory_tile, actions, game_state)
 
-                # previous ice mining code
                 elif unit.unit_type=="LIGHT": 
-                    # Send light ones to the next closest tile and heavies to the closest.
-                    # If there isn't enough ice in cargo, go dig.
-                    if unit.cargo.ice < 50:
-                        target_ice_pos = self.get_optimal_ice_pos(unit=unit, unit_id=unit_id, ice_tile_locations=ice_tile_locations)
-                        if np.all(target_ice_pos == unit.pos):
-                            if len(unit.action_queue) == 0:
-                                if unit.power >= unit.dig_cost(game_state) + unit.action_queue_cost(game_state):
-                                    actions[unit_id] = [unit.dig(repeat=10, n=1)]
-                            else:
-                                pass
-                        else:
-                            direction = direction_to(unit.pos, target_ice_pos)
-                            self.move_bot(direction, unit, game_state, actions)
-                    # else if we have enough ice, we go back to the factory and dump it.
-                    elif unit.cargo.ice >= 50:
-                        direction = direction_to(unit.pos, closest_factory_tile)
-                        if adjacent_to_factory:
-                            if unit.power >= unit.action_queue_cost(game_state):
-                                actions[unit_id] = [unit.transfer(direction, 0, unit.cargo.ice, repeat=0, n=1)]
-                        else:
-                            self.move_bot(direction, unit, game_state, actions)
+                    if self.DROUGHT_STATE:
+                        self.dump_ice(unit_id, unit, closest_factory_tile, actions, game_state)
+                    else:
+                        # Send light ones to the next closest tile and heavies to the closest.
+                        # If there isn't enough ice in cargo, go dig.
+                        if unit.cargo.ice < LIGHT_CARGO_TARGET:
+                            self.dig_ice(unit_id, unit, ice_tile_locations, actions, game_state)
+                        # else if we have enough ice, we go back to the factory and dump it.
+                        elif unit.cargo.ice >= LIGHT_CARGO_TARGET:
+                            self.dump_ice(unit_id, unit, closest_factory_tile, actions, game_state)
         return actions
