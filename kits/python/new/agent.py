@@ -2,7 +2,7 @@ from lux.kit import obs_to_game_state, GameState, EnvConfig
 from lux.utils import direction_to, my_turn_to_place_factory
 import numpy as np
 import math, random
-
+from collections import defaultdict
 import sys
 
 move_deltas = np.array([[0, 0], [0, -1], [1, 0], [0, 1], [-1, 0]])
@@ -17,6 +17,8 @@ class Agent():
         self.planned_factories_to_place = 0
         self.metal_per_factory = 150
         self.water_per_factory = 150
+        self.mining_target_map = dict() # dict to map robot to its mining target
+        self.mining_target_reverse_map = dict() # dict to map mining target tile to robot id
 
     def no_collisions_next_step(self, current_pos, direction, game_state):
         """
@@ -107,6 +109,46 @@ class Agent():
             else:
                 return unit.pos
 
+    def get_manhattan_distance(self, tile_1, tile_2):
+        """
+        Gets the manhattan distance (grid) between 2 tiles, assumming 2d tiles.
+        """
+        return np.abs(tile_1[0] - tile_2[0]) + np.abs(tile_1[1]-tile_2[1])
+
+    def get_optimal_ice_pos(self, unit_id, unit, ice_tile_locations):
+        """
+        Searches the full ice map, and uses target tile memory to find the
+        next best target for the robot.
+        """
+        ice_tile_distances_map = defaultdict(list)
+        ice_tile_distances = np.mean((ice_tile_locations - unit.pos) ** 2, 1)
+        closest_ice_tile = ice_tile_locations[np.argmin(ice_tile_distances)]
+        target_ice_pos = closest_ice_tile #default to closest
+    
+
+        # If we already have a target, move towards it
+        if unit_id in self.mining_target_map:
+            target_ice_pos = self.mining_target_map[unit_id]
+        else:
+            for ice_tile in ice_tile_locations:
+                ice_dist = self.get_manhattan_distance(ice_tile,unit.pos)
+                # print(f"{ice_dist=}, {ice_dist.shape=}",file=sys.stderr)
+                ice_tile_distances_map[ice_dist].append(ice_tile)
+
+            sorted_distances = dict(sorted(ice_tile_distances_map.items()))
+            # print(f"{sorted_distances=}",file=sys.stderr)
+            for ice_dist, ice_tile in sorted_distances.items():
+                target_tuple = tuple([ice_tile[0][0],ice_tile[0][1]])
+                if not target_tuple in self.mining_target_reverse_map:
+                    # Log target
+                    self.mining_target_map[unit_id] = target_tuple
+                    self.mining_target_reverse_map[target_tuple] = unit_id
+                    target_ice_pos = target_tuple
+                    break
+                    
+        print(f"{unit_id=}, {target_ice_pos=}",file=sys.stderr)
+        return target_ice_pos
+    
     def early_setup(self, step: int, obs, remainingOverageTime: int = 60):
         original_factories_to_place = 0
         # print(f"{step=}",file=sys.stderr) 
@@ -185,16 +227,15 @@ class Agent():
 
                 if unit.unit_type=="HEAVY":
                     if unit.cargo.ice < 200:
-                        ice_tile_distances = np.mean((ice_tile_locations - unit.pos) ** 2, 1)
-                        closest_ice_tile = ice_tile_locations[np.argmin(ice_tile_distances)]
-                        if np.all(closest_ice_tile == unit.pos):
+                        target_ice_pos = self.get_optimal_ice_pos(unit=unit, unit_id=unit_id, ice_tile_locations=ice_tile_locations)
+                        if np.all(target_ice_pos == unit.pos):
                             if len(unit.action_queue) == 0:
                                 if unit.power >= unit.dig_cost(game_state) + unit.action_queue_cost(game_state):
                                     actions[unit_id] = [unit.dig(repeat=10, n=1)]
-                            else:
-                                pass
+                                else:
+                                    pass
                         else:
-                            direction = direction_to(unit.pos, closest_ice_tile)
+                            direction = direction_to(unit.pos, target_ice_pos)
                             self.move_bot(direction, unit, game_state, actions)
                     # else if we have enough ice, we go back to the factory and dump it.
                     elif unit.cargo.ice >= 200:
@@ -211,17 +252,15 @@ class Agent():
                     # Send light ones to the next closest tile and heavies to the closest.
                     # If there isn't enough ice in cargo, go dig.
                     if unit.cargo.ice < 50:
-                        ice_tile_distances = np.mean((ice_tile_locations - unit.pos) ** 2, 1)
-                        # closest_ice_tile = ice_tile_locations[np.argmin(ice_tile_distances)]
-                        sorted_indices = np.argsort(ice_tile_distances)
-
-                        # Take index at position 1 for 2nd closest 
-                        next_random_closest_idx = sorted_indices[random.randint(1, int(len(sorted_indices)/2))]
-                        if np.all(next_random_closest_idx == unit.pos):
-                            if unit.power >= unit.dig_cost(game_state) + unit.action_queue_cost(game_state):
-                                actions[unit_id] = [unit.dig(repeat=0, n=1)]
+                        target_ice_pos = self.get_optimal_ice_pos(unit=unit, unit_id=unit_id, ice_tile_locations=ice_tile_locations)
+                        if np.all(target_ice_pos == unit.pos):
+                            if len(unit.action_queue) == 0:
+                                if unit.power >= unit.dig_cost(game_state) + unit.action_queue_cost(game_state):
+                                    actions[unit_id] = [unit.dig(repeat=10, n=1)]
+                            else:
+                                pass
                         else:
-                            direction = direction_to(unit.pos, next_random_closest_idx)
+                            direction = direction_to(unit.pos, target_ice_pos)
                             self.move_bot(direction, unit, game_state, actions)
                     # else if we have enough ice, we go back to the factory and dump it.
                     elif unit.cargo.ice >= 50:
