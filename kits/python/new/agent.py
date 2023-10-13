@@ -265,7 +265,7 @@ class Agent():
             elif factory.power >= self.env_cfg.ROBOTS["LIGHT"].POWER_COST and \
             factory.cargo.metal >= self.env_cfg.ROBOTS["LIGHT"].METAL_COST:
                 actions[unit_id] = factory.build_light()
-            if self.env_cfg.max_episode_length - game_state.real_env_steps < 50:
+            if self.env_cfg.max_episode_length - game_state.real_env_steps < 250:
                 if factory.water_cost(game_state) <= factory.cargo.water:
                     actions[unit_id] = factory.water()
             factory_tiles += [factory.pos]
