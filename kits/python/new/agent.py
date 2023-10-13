@@ -251,8 +251,19 @@ class Agent():
         #     HEAVY_CARGO_TARGET = 100
         #     LIGHT_CARGO_TARGET = 20
         # else:
-        HEAVY_CARGO_TARGET = 200
-        LIGHT_CARGO_TARGET = 50
+        if game_state.real_env_steps <= 200:
+            HEAVY_CARGO_TARGET = self.total_original_water / len(factories.keys())
+            LIGHT_CARGO_TARGET = 100
+        elif game_state.real_env_steps <= 500:
+            HEAVY_CARGO_TARGET = self.total_original_water / (len(factories.keys()) * 2)
+            LIGHT_CARGO_TARGET = 50
+        elif game_state.real_env_steps <= 750:
+            HEAVY_CARGO_TARGET = self.total_original_water / (len(factories.keys()) * 4)
+            LIGHT_CARGO_TARGET = 40
+        else:
+            HEAVY_CARGO_TARGET = 20
+            LIGHT_CARGO_TARGET = 20
+        
 
 
 
@@ -287,24 +298,24 @@ class Agent():
                 adjacent_to_factory = np.mean((closest_factory_tile - unit.pos) ** 2) <= 4
 
                 if unit.unit_type=="HEAVY":
-                    if self.DROUGHT_STATE:
+                    # if self.DROUGHT_STATE:
+                    #     self.dump_ice(unit_id, unit, closest_factory_tile, actions, game_state)
+                    # else:    
+                    if unit.cargo.ice < HEAVY_CARGO_TARGET:
+                        self.dig_ice(unit_id, unit, ice_tile_locations, actions, game_state)
+                    # else if we have enough ice, we go back to the factory and dump it.
+                    elif unit.cargo.ice >= HEAVY_CARGO_TARGET:
                         self.dump_ice(unit_id, unit, closest_factory_tile, actions, game_state)
-                    else:    
-                        if unit.cargo.ice < HEAVY_CARGO_TARGET:
-                            self.dig_ice(unit_id, unit, ice_tile_locations, actions, game_state)
-                        # else if we have enough ice, we go back to the factory and dump it.
-                        elif unit.cargo.ice >= HEAVY_CARGO_TARGET:
-                            self.dump_ice(unit_id, unit, closest_factory_tile, actions, game_state)
 
                 elif unit.unit_type=="LIGHT": 
-                    if self.DROUGHT_STATE:
+                    # if self.DROUGHT_STATE:
+                    #     self.dump_ice(unit_id, unit, closest_factory_tile, actions, game_state)
+                    # else:
+                    # Send light ones to the next closest tile and heavies to the closest.
+                    # If there isn't enough ice in cargo, go dig.
+                    if unit.cargo.ice < LIGHT_CARGO_TARGET:
+                        self.dig_ice(unit_id, unit, ice_tile_locations, actions, game_state)
+                    # else if we have enough ice, we go back to the factory and dump it.
+                    elif unit.cargo.ice >= LIGHT_CARGO_TARGET:
                         self.dump_ice(unit_id, unit, closest_factory_tile, actions, game_state)
-                    else:
-                        # Send light ones to the next closest tile and heavies to the closest.
-                        # If there isn't enough ice in cargo, go dig.
-                        if unit.cargo.ice < LIGHT_CARGO_TARGET:
-                            self.dig_ice(unit_id, unit, ice_tile_locations, actions, game_state)
-                        # else if we have enough ice, we go back to the factory and dump it.
-                        elif unit.cargo.ice >= LIGHT_CARGO_TARGET:
-                            self.dump_ice(unit_id, unit, closest_factory_tile, actions, game_state)
         return actions
