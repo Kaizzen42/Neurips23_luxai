@@ -68,8 +68,8 @@ class Agent():
                 else: # try moving opposite to the orthogonal direction
                     if self.no_collisions_next_step(unit.pos, opposite_directions[random_other_direction], game_state):
                         actions[unit.unit_id] = [unit.move(opposite_directions[random_other_direction], repeat=0, n=1)]
-                    else: # Don't move
-                        actions[unit.unit_id] = [unit.recharge(0, repeat=0, n=1)]
+                    # else: # Don't move
+                    #     actions[unit.unit_id] = [unit.recharge(0, repeat=0, n=1)]
 
     def place_factory(self, obs, game_state, metal_per_factory, water_per_factory):
         potential_spawns = np.array(list(zip(*np.where(obs["board"]["valid_spawns_mask"] == 1))))
@@ -159,12 +159,13 @@ class Agent():
         # print(f"{unit_id=}, {target_ice_pos=}",file=sys.stderr)
         return target_ice_pos
     
-    def dump_ice(self, unit_id, unit, closest_factory_tile, actions, game_state):
-        adjacent_to_factory = np.mean((closest_factory_tile - unit.pos) ** 2) <= 4
+    def dump_ice(self, unit_id, unit, closest_factory_tile, closest_factory, actions, game_state):
+        adjacent_to_factory = np.mean((closest_factory_tile - unit.pos) ** 2) <= 1
         direction = direction_to(unit.pos, closest_factory_tile)
         if adjacent_to_factory:
             if unit.power >= unit.action_queue_cost(game_state):
-                actions[unit_id] = [unit.transfer(direction, 0, unit.cargo.ice, repeat=0, n=1)]
+                    actions[unit_id] = [unit.transfer(direction, 0, unit.cargo.ice, repeat=0, n=1)]
+                    actions[unit_id].append(unit.pickup(4, min(closest_factory.power, unit.unit_cfg.BATTERY_CAPACITY - unit.power), repeat=0, n=1))
         else:
             self.move_bot(direction, unit, game_state, actions)    
 
@@ -175,7 +176,7 @@ class Agent():
                 if unit.power >= unit.dig_cost(game_state) + unit.action_queue_cost(game_state):
                     actions[unit_id] = [unit.dig(repeat=10, n=1)]
                 else:
-                    pass
+                    pass #actions[unit_id] = [unit.recharge(x=100,repeat=0,n=1)]
         else:
             direction = direction_to(unit.pos, target_ice_pos)
             self.move_bot(direction, unit, game_state, actions)
@@ -192,8 +193,8 @@ class Agent():
             # Initialize
             if self.planned_factories_to_place == 0:
                 original_factories_to_place = game_state.teams[self.player].factories_to_place
-                self.planned_factories_to_place = max(original_factories_to_place // 2, 1)
-                # self.planned_factories_to_place =  original_factories_to_place
+                # self.planned_factories_to_place = max(original_factories_to_place // 2, 1)
+                self.planned_factories_to_place =  original_factories_to_place
                 # how much water and metal you have in your starting pool to give to new factories
                 start_water_left = game_state.teams[self.player].water
                 start_metal_left = game_state.teams[self.player].metal
@@ -209,7 +210,8 @@ class Agent():
                    {self.water_per_factory=} \
                     {self.metal_per_factory=}", file=sys.stderr)
 
-            if factories_to_place >= self.planned_factories_to_place and my_turn_to_place:
+            # if factories_to_place >= self.planned_factories_to_place and my_turn_to_place:
+            if factories_to_place <= self.planned_factories_to_place and my_turn_to_place:
                 water_left = game_state.teams[self.player].water
                 metal_left = game_state.teams[self.player].metal 
                 m = self.metal_per_factory
@@ -224,7 +226,6 @@ class Agent():
 
 
     def act(self, step: int, obs, remainingOverageTime: int = 60):
-        
         
         actions = dict()
         game_state = obs_to_game_state(step, self.env_cfg, obs)
@@ -251,27 +252,28 @@ class Agent():
             if total_water <= self.total_original_water / 2:
                 self.DROUGHT_STATE = True
                 self.DROUGHT_RECOVERY_COUNTER = 10
-                print(f"Drougt State. Returning all bots. Total water = {total_water} vs. originally allocated water = {self.total_original_water}", file=sys.stderr)
+                print(f"Drougt State Detected. Total water = {total_water} vs. originally allocated water = {self.total_original_water}", file=sys.stderr)
 
         
         # if self.DROUGHT_STATE:
         #     HEAVY_CARGO_TARGET = 100
         #     LIGHT_CARGO_TARGET = 20
         # else:
-        if game_state.real_env_steps <= 200:
-            HEAVY_CARGO_TARGET = self.total_original_water / len(factories.keys())
-            LIGHT_CARGO_TARGET = 100
-        elif game_state.real_env_steps <= 500:
-            HEAVY_CARGO_TARGET = self.total_original_water / (len(factories.keys()) * 2)
-            LIGHT_CARGO_TARGET = 50
-        elif game_state.real_env_steps <= 750:
-            HEAVY_CARGO_TARGET = self.total_original_water / (len(factories.keys()) * 4)
-            LIGHT_CARGO_TARGET = 40
-        else:
-            HEAVY_CARGO_TARGET = 20
-            LIGHT_CARGO_TARGET = 20
+        # if game_state.real_env_steps <= 200:
+        #     HEAVY_CARGO_TARGET = self.total_original_water / len(factories.keys())
+        #     LIGHT_CARGO_TARGET = 100
+        # elif game_state.real_env_steps <= 500:
+        #     HEAVY_CARGO_TARGET = self.total_original_water / (len(factories.keys()) * 2)
+        #     LIGHT_CARGO_TARGET = 50
+        # elif game_state.real_env_steps <= 750:
+        #     HEAVY_CARGO_TARGET = self.total_original_water / (len(factories.keys()) * 4)
+        #     LIGHT_CARGO_TARGET = 40
+        # else:
+        #     HEAVY_CARGO_TARGET = 20
+        #     LIGHT_CARGO_TARGET = 20
         
-
+        HEAVY_CARGO_TARGET = 160
+        LIGHT_CARGO_TARGET = 50
 
 
         factory_tiles, factory_units = [], []
@@ -283,7 +285,8 @@ class Agent():
             elif factory.power >= self.env_cfg.ROBOTS["LIGHT"].POWER_COST and \
             factory.cargo.metal >= self.env_cfg.ROBOTS["LIGHT"].METAL_COST:
                 actions[unit_id] = factory.build_light()
-            if self.env_cfg.max_episode_length - game_state.real_env_steps < 250:
+            # Lichen
+            if self.env_cfg.max_episode_length - game_state.real_env_steps < 200:
                 if factory.water_cost(game_state) <= factory.cargo.water:
                     actions[unit_id] = factory.water()
             factory_tiles += [factory.pos]
@@ -301,7 +304,7 @@ class Agent():
             if len(factory_tiles) > 0:
                 factory_distances = np.mean((factory_tiles - unit.pos) ** 2, 1)
                 closest_factory_tile = factory_tiles[np.argmin(factory_distances)]
-                # closest_factory = factory_units[np.argmin(factory_distances)]
+                closest_factory = factory_units[np.argmin(factory_distances)]
                 adjacent_to_factory = np.mean((closest_factory_tile - unit.pos) ** 2) <= 4
 
                 if unit.unit_type=="HEAVY":
@@ -312,7 +315,7 @@ class Agent():
                         self.dig_ice(unit_id, unit, ice_tile_locations, actions, game_state)
                     # else if we have enough ice, we go back to the factory and dump it.
                     elif unit.cargo.ice >= HEAVY_CARGO_TARGET:
-                        self.dump_ice(unit_id, unit, closest_factory_tile, actions, game_state)
+                        self.dump_ice(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state)
 
                 elif unit.unit_type=="LIGHT": 
                     # if self.DROUGHT_STATE:
@@ -324,5 +327,5 @@ class Agent():
                         self.dig_ice(unit_id, unit, ice_tile_locations, actions, game_state)
                     # else if we have enough ice, we go back to the factory and dump it.
                     elif unit.cargo.ice >= LIGHT_CARGO_TARGET:
-                        self.dump_ice(unit_id, unit, closest_factory_tile, actions, game_state)
+                        self.dump_ice(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state)
         return actions
