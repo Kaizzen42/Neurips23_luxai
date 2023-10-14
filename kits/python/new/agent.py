@@ -43,6 +43,10 @@ class Agent():
         return True
 
     def move_bot(self, direction, unit, game_state, actions):
+        """ Moves the bot one step in the given direction if there are no collisions.
+            If there are collisions it picks a direction orthogonal to the collision direction.
+            If it collides in both orthogonal directions then it stays there and recharges.
+        """
         move_cost = unit.move_cost(game_state, direction)
         if move_cost is not None and unit.power >= move_cost + unit.action_queue_cost(game_state):
             if self.no_collisions_next_step(unit.pos, direction, game_state):
@@ -68,6 +72,9 @@ class Agent():
         # First modification: lets spawn near ice.
         ice_map = game_state.board.ice
         ice_tile_locations = np.argwhere(ice_map == 1)
+
+        print(f"INFO SHAACH Ice Tile locations: {ice_tile_locations}", file=sys.stderr)
+
         min_ice_dist = float(math.inf)
         best_spawn_choice = potential_spawns[np.random.randint(0, len(potential_spawns))]
         for spawn_choice in potential_spawns:
