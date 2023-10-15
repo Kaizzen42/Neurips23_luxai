@@ -247,55 +247,52 @@ class Agent():
         dig_capacity = 50   -> n = rubble_amount / 2 
         """
 
-        rubble_locs = np.argwhere(game_state.board.rubble > 0)
+        rubble_locs = np.argwhere(game_state.board.rubble >=1)
         # print(f"Rubble Amount at location at 63, 60 {game_state.board.rubble[63, 60]}", file=sys.stderr)
         # print(f"Rubble locations {rubble_locs}, Max rubble {np.max(game_state.board.rubble)}, Min rubble {np.min(game_state.board.rubble)}", file=sys.stderr)
 
         starting_loc = self.nearest_rubble_loc(unit, rubble_locs)
-        print(f"{starting_loc=}, {type(starting_loc)}", file=sys.stderr)
-        if np.all(starting_loc == unit.pos):
-            # dig
-            power_to_save = self.cost_of_reaching_closest_factory(closest_factory_tile, unit.pos) + 20
-            dig_capacity = np.max((unit.power - power_to_save) // 5, 0)
-            rubble_amount = game_state.board.rubble[starting_loc.item(0), starting_loc.item(1)]
+        # print(f"{starting_loc=}, {type(starting_loc)}", file=sys.stderr)
+        power_to_save = self.cost_of_reaching_closest_factory(closest_factory_tile, unit.pos) #+ 20
+        dig_capacity = np.max((unit.power - power_to_save) // 5, 0)
+        rubble_amount = game_state.board.rubble[starting_loc.item(0), starting_loc.item(1)]
+        if dig_capacity > 0:
+            n1 = 0
+            repeat1 = 0
+            if np.all(starting_loc == unit.pos):
 
-            if dig_capacity > 0 and rubble_amount > 0:
-
-                n = 0
-                repeat = 0
+                # if dig_capacity > 0:
+                # Decide how much to dig in this and the next turn
                 if rubble_amount <= (2 * dig_capacity):
-                    n = math.ceil(rubble_amount // 2)
-                    repeat = 0
+                    n1 = math.ceil(rubble_amount / 2)
+                    repeat1 = 0
                 else:
-                    n = dig_capacity
-                    repeat = math.ceil((rubble_amount - (dig_capacity * 2)) // 2)
+                    n1 = dig_capacity
+                    repeat1 = math.ceil((rubble_amount - (dig_capacity * 2)) / 2)
 
+                # print(f"SHAACH 15 {dig_capacity=} {rubble_amount=}", file=sys.stderr)
+                # print(f"SHAACH 15 {n1=} {repeat1=}", file=sys.stderr)
                 # if n > 0:
                 if unit.unit_id in actions:
-                    actions[unit.unit_id].append(unit.dig(repeat=repeat, n=n))
+                    actions[unit.unit_id].append(unit.dig(repeat=repeat1, n=n1))
                 else:
-                    actions[unit.unit_id] = [unit.dig(repeat=repeat, n=n)]
-                # else:
-                #     direction = direction_to(unit.pos, starting_loc)
-                #     print(f"SHAACH 15 {direction=}", file=sys.stderr)
-                #     self.move_bot(direction, unit, game_state, actions)
-            else: # robot is at the right location, but not enough power go to factory and recharge
+                    actions[unit.unit_id] = [unit.dig(repeat=repeat1, n=n1)]
+
+            else:
+                direction = direction_to(unit.pos, starting_loc)
+                self.move_bot(direction, unit, game_state, actions)
+
+        else: # dig capacity is not enough, need to go to the factory
+            adjacent_to_factory = np.mean((closest_factory_tile - unit.pos) ** 2) <= 1
+            
+            if adjacent_to_factory:
+                if unit.unit_id not in actions:
+                    actions[unit.unit_id] = [unit.pickup(4, min(closest_factory.power, unit.unit_cfg.BATTERY_CAPACITY - unit.power), repeat=0, n=1)]
+                else:
+                    actions[unit.unit_id].append(unit.pickup(4, min(closest_factory.power, unit.unit_cfg.BATTERY_CAPACITY - unit.power), repeat=0, n=1))
+            else:
                 direction = direction_to(unit.pos, closest_factory_tile)
                 self.move_bot(direction, unit, game_state, actions)
-                if np.all(closest_factory_tile == unit.pos):
-                    if unit.unit_id not in actions:
-                        actions[unit.unit_id] = [unit.pickup(4, min(closest_factory.power, unit.unit_cfg.BATTERY_CAPACITY - unit.power), repeat=0, n=1)]
-                    else:
-                        actions[unit.unit_id].append(unit.pickup(4, min(closest_factory.power, unit.unit_cfg.BATTERY_CAPACITY - unit.power), repeat=0, n=1))
-
-        else:
-            direction = direction_to(unit.pos, starting_loc)
-            self.move_bot(direction, unit, game_state, actions)
-            # if unit.unit_id in actions:
-            #     actions[unit.unit_id].append(unit.move(direction, repeat=0, n=1))
-            # else:
-            #     actions[unit.unit_id] = [unit.move(direction, repeat=0, n=1)]
-
 
 
     def act(self, step: int, obs, remainingOverageTime: int = 60):
