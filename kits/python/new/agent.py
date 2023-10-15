@@ -304,6 +304,7 @@ class Agent():
         
         HEAVY_CARGO_TARGET = 160
         LIGHT_CARGO_TARGET = 50
+        LICHEN_PROD_STEPS = 200
 
         factory_tiles, factory_units = [], []
         for unit_id, factory in factories.items():
@@ -315,7 +316,7 @@ class Agent():
             factory.cargo.metal >= self.env_cfg.ROBOTS["LIGHT"].METAL_COST:
                 actions[unit_id] = factory.build_light()
             # Lichen
-            if self.env_cfg.max_episode_length - game_state.real_env_steps < 200:
+            if self.env_cfg.max_episode_length - game_state.real_env_steps < LICHEN_PROD_STEPS:
                 if factory.water_cost(game_state) <= factory.cargo.water:
                     actions[unit_id] = factory.water()
             factory_tiles += [factory.pos]
@@ -345,14 +346,12 @@ class Agent():
 
                 elif unit.unit_type=="LIGHT": 
                     #print(f"Rubbles {game_state.board.rubble}", file=sys.stderr)
-                    self.dig_rubble(unit, closest_factory_tile, closest_factory, actions, game_state)
-
-                    # If there isn't enough ice in cargo, go dig.
-
-                    # commenting ice digging logic
-                    # if unit.cargo.ice < LIGHT_CARGO_TARGET:
-                    #     self.dig_ice(unit_id, unit, ice_tile_locations, actions, game_state)
-                    # # else if we have enough ice, we go back to the factory and dump it.
-                    # elif unit.cargo.ice >= LIGHT_CARGO_TARGET:
-                    #     self.dump_ice(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state)
+                    if self.env_cfg.max_episode_length - game_state.real_env_steps > LICHEN_PROD_STEPS:
+                        self.dig_rubble(unit, closest_factory_tile, closest_factory, actions, game_state)
+                    else:
+                        if unit.cargo.ice < LIGHT_CARGO_TARGET:
+                            self.dig_ice(unit_id, unit, ice_tile_locations, actions, game_state)
+                        # else if we have enough ice, we go back to the factory and dump it.
+                        elif unit.cargo.ice >= LIGHT_CARGO_TARGET:
+                            self.dump_ice(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state)
         return actions
