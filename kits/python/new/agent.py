@@ -60,8 +60,11 @@ class Agent():
                 # Lets move in one of the orthogonal directions.
                 other_dirs = [0,1,2,3,4]
                 other_dirs.remove(direction)
+
                 opposite_dir = opposite_directions[direction]
-                other_dirs.remove(opposite_dir)
+                if opposite_dir != 0:
+                    other_dirs.remove(opposite_dir)
+
                 random_other_direction = random.choice(other_dirs)
                 if self.no_collisions_next_step(unit.pos, random_other_direction, game_state):
                     actions[unit.unit_id] = [unit.move(random_other_direction, repeat=0, n=1)]
@@ -78,7 +81,7 @@ class Agent():
         ice_map = game_state.board.ice
         ice_tile_locations = np.argwhere(ice_map == 1)
 
-        print(f"INFO SHAACH Ice Tile locations: {ice_tile_locations}", file=sys.stderr)
+        # print(f"INFO SHAACH Ice Tile locations: {ice_tile_locations}", file=sys.stderr)
 
         min_ice_dist = float(math.inf)
         best_spawn_choice = potential_spawns[np.random.randint(0, len(potential_spawns))]
@@ -226,6 +229,73 @@ class Agent():
                 return self.place_factory(obs, game_state, m, w)
             return dict()
 
+    def nearest_rubble_loc(self, unit, rubble_locations):         
+        #print(f"Rubble locations shape {rubble_locations.shape}", file=sys.stderr)
+        rubble_tile_distances = np.mean((rubble_locations - unit.pos) ** 2, 1)
+        closest_rubble_tile = rubble_locations[np.argmin(rubble_tile_distances)]
+        #print(f" SHAACH 14 {closest_rubble_tile=}", file=sys.stderr)
+        return closest_rubble_tile
+
+    def cost_of_reaching_closest_factory(self, current_loc, factory_loc):
+        return self.get_manhattan_distance(current_loc, factory_loc)
+
+    # logic for light robots to clear the rubel
+    def dig_rubble(self, unit, closest_factory_tile, closest_factory, actions, game_state):
+        """
+        rubble_amount = 85
+        dig_capacity = 20   -> n = dig_capacity
+        dig_capacity = 50   -> n = rubble_amount / 2 
+        """
+
+        rubble_locs = np.argwhere(game_state.board.rubble > 0)
+        # print(f"Rubble Amount at location at 63, 60 {game_state.board.rubble[63, 60]}", file=sys.stderr)
+        # print(f"Rubble locations {rubble_locs}, Max rubble {np.max(game_state.board.rubble)}, Min rubble {np.min(game_state.board.rubble)}", file=sys.stderr)
+
+        starting_loc = self.nearest_rubble_loc(unit, rubble_locs)
+        print(f"{starting_loc=}, {type(starting_loc)}", file=sys.stderr)
+        if np.all(starting_loc == unit.pos):
+            # dig
+            power_to_save = self.cost_of_reaching_closest_factory(closest_factory_tile, unit.pos) + 20
+            dig_capacity = np.max((unit.power - power_to_save) // 5, 0)
+            rubble_amount = game_state.board.rubble[starting_loc.item(0), starting_loc.item(1)]
+
+            if dig_capacity > 0 and rubble_amount > 0:
+
+                n = 0
+                repeat = 0
+                if rubble_amount <= (2 * dig_capacity):
+                    n = math.ceil(rubble_amount // 2)
+                    repeat = 0
+                else:
+                    n = dig_capacity
+                    repeat = math.ceil((rubble_amount - (dig_capacity * 2)) // 2)
+
+                # if n > 0:
+                if unit.unit_id in actions:
+                    actions[unit.unit_id].append(unit.dig(repeat=repeat, n=n))
+                else:
+                    actions[unit.unit_id] = [unit.dig(repeat=repeat, n=n)]
+                # else:
+                #     direction = direction_to(unit.pos, starting_loc)
+                #     print(f"SHAACH 15 {direction=}", file=sys.stderr)
+                #     self.move_bot(direction, unit, game_state, actions)
+            else: # robot is at the right location, but not enough power go to factory and recharge
+                direction = direction_to(unit.pos, closest_factory_tile)
+                self.move_bot(direction, unit, game_state, actions)
+                if np.all(closest_factory_tile == unit.pos):
+                    if unit.unit_id not in actions:
+                        actions[unit.unit_id] = [unit.pickup(4, min(closest_factory.power, unit.unit_cfg.BATTERY_CAPACITY - unit.power), repeat=0, n=1)]
+                    else:
+                        actions[unit.unit_id].append(unit.pickup(4, min(closest_factory.power, unit.unit_cfg.BATTERY_CAPACITY - unit.power), repeat=0, n=1))
+
+        else:
+            direction = direction_to(unit.pos, starting_loc)
+            self.move_bot(direction, unit, game_state, actions)
+            # if unit.unit_id in actions:
+            #     actions[unit.unit_id].append(unit.move(direction, repeat=0, n=1))
+            # else:
+            #     actions[unit.unit_id] = [unit.move(direction, repeat=0, n=1)]
+
 
 
     def act(self, step: int, obs, remainingOverageTime: int = 60):
@@ -277,10 +347,15 @@ class Agent():
                         self.dump_ice(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state)
 
                 elif unit.unit_type=="LIGHT": 
+                    #print(f"Rubbles {game_state.board.rubble}", file=sys.stderr)
+                    self.dig_rubble(unit, closest_factory_tile, closest_factory, actions, game_state)
+
                     # If there isn't enough ice in cargo, go dig.
-                    if unit.cargo.ice < LIGHT_CARGO_TARGET:
-                        self.dig_ice(unit_id, unit, ice_tile_locations, actions, game_state)
-                    # else if we have enough ice, we go back to the factory and dump it.
-                    elif unit.cargo.ice >= LIGHT_CARGO_TARGET:
-                        self.dump_ice(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state)
+
+                    # commenting ice digging logic
+                    # if unit.cargo.ice < LIGHT_CARGO_TARGET:
+                    #     self.dig_ice(unit_id, unit, ice_tile_locations, actions, game_state)
+                    # # else if we have enough ice, we go back to the factory and dump it.
+                    # elif unit.cargo.ice >= LIGHT_CARGO_TARGET:
+                    #     self.dump_ice(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state)
         return actions
