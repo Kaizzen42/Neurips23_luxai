@@ -59,7 +59,6 @@ class Agent():
                 # Lets move in one of the orthogonal directions.
                 other_dirs = [0,1,2,3,4]
                 other_dirs.remove(direction)
-
                 opposite_dir = opposite_directions[direction]
                 if opposite_dir != 0:
                     other_dirs.remove(opposite_dir)
@@ -80,7 +79,7 @@ class Agent():
         ice_map = game_state.board.ice
         ice_tile_locations = np.argwhere(ice_map == 1)
 
-        # print(f"INFO SHAACH Ice Tile locations: {ice_tile_locations}", file=sys.stderr)
+        print(f"INFO SHAACH Ice Tile locations: {ice_tile_locations}", file=sys.stderr)
 
         min_ice_dist = float(math.inf)
         best_spawn_choice = potential_spawns[np.random.randint(0, len(potential_spawns))]
@@ -320,17 +319,16 @@ class Agent():
 
             # Halfway through the game, start checking on opponent
             if self.env_cfg.max_episode_length - game_state.real_env_steps < 500: 
-                opp_team = game_state.teams.get(self.opp_player)
 
                 units = game_state.units[self.player]
                 opp_factories = game_state.factories[self.opp_player]
-                
                 onboard_lichen_tiles = game_state.board.lichen 
 
                 target_lichen_tiles = []
                 for fac in opp_factories:
                     for lichen in onboard_lichen_tiles:
                         lic_fac_dis = self.get_manhattan_distance(lichen, fac.pos)
+                        # Todo: Make sure, these aren't our own lichen!!!
                         if lic_fac_dis <= 3:
                             target_lichen_tiles.append(lichen)
 
@@ -338,9 +336,18 @@ class Agent():
                 for unit in units:
                     if unit.unit_type=="LIGHT":
                         light_units[unit.unit_id] = unit.pos
-                if len(light_units) > len(opp_factories):
+                available_attack_bots = len(light_units) > len(opp_factories)
+                if available_attack_bots > 0:
                     ATTACK_MODE = True
-                    
+                    self.bot_role["redbot"] = []
+                    light_keys = light_units.keys()
+                    for i in range(available_attack_bots):
+                        self.bot_role["redbot"].append(light_keys[i])
+                    self.bot_role["builder"] = []
+                    while i < len(light_units):
+                        self.bot_role["builder"].append(light_keys[i])
+                        i+=1
+                        
 
 
                 # # This code can be moved out from every action, into the setup phase
@@ -359,6 +366,7 @@ class Agent():
         ice_map = game_state.board.ice
         ice_tile_locations = np.argwhere(ice_map == 1)
         
+        red_bots = set(self.bot_role["redbot"])
         for unit_id, unit in units.items():
             # track the closest factory
             closest_factory = None
