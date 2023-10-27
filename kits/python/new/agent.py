@@ -8,6 +8,10 @@ import sys
 move_deltas = np.array([[0, 0], [0, -1], [1, 0], [0, 1], [-1, 0]])
 opposite_directions = {1:3,3:1,2:4,4:2,0:0}
 
+
+def pp(strp):
+    return print(strp,file=sys.stderr)
+
 class Agent():
     def __init__(self, player: str, env_cfg: EnvConfig) -> None:
         self.player = player
@@ -21,6 +25,9 @@ class Agent():
         self.mining_target_reverse_map = dict() # dict to map mining target tile to robot id
         self.total_original_water = 0
         self.bot_role = dict()  # Every bot would be classified as miner/cleaner/redbot (enemy focussed)
+        self.attack_target_map = dict() # maps redbot to target tile
+        self.attack_target_reverse_map = dict() 
+        self.ATTACK_MODE = False # Turned on when ready to attack opponent lichens.
 
     def no_collisions_next_step(self, current_pos, direction, game_state):
         """
@@ -79,7 +86,7 @@ class Agent():
         ice_map = game_state.board.ice
         ice_tile_locations = np.argwhere(ice_map == 1)
 
-        print(f"INFO SHAACH Ice Tile locations: {ice_tile_locations}", file=sys.stderr)
+        # print(f"INFO SHAACH Ice Tile locations: {ice_tile_locations}", file=sys.stderr)
 
         min_ice_dist = float(math.inf)
         best_spawn_choice = potential_spawns[np.random.randint(0, len(potential_spawns))]
@@ -172,6 +179,18 @@ class Agent():
         else:
             self.move_bot(direction, unit, game_state, actions)    
 
+    def fast_charge(self, unit_id, unit, closest_factory_tile, closest_factory, actions, game_state):
+        adjacent_to_factory = np.mean((closest_factory_tile - unit.pos) ** 2) <= 1
+        direction = direction_to(unit.pos, closest_factory_tile)
+        if adjacent_to_factory:
+            if unit.power >= unit.action_queue_cost(game_state):
+                actions[unit_id] = [unit.pickup(4, 
+                                        min(closest_factory.power, 
+                                            unit.unit_cfg.BATTERY_CAPACITY - unit.power), 
+                                        repeat=0, n=1)]
+        else:
+            self.move_bot(direction, unit, game_state, actions)  
+
     def dig_ice(self, unit_id, unit, ice_tile_locations, actions, game_state):
         target_ice_pos = self.get_optimal_ice_pos(unit=unit, unit_id=unit_id, ice_tile_locations=ice_tile_locations)
         if np.all(target_ice_pos == unit.pos):
@@ -182,6 +201,67 @@ class Agent():
                     pass #actions[unit_id] = [unit.recharge(x=100,repeat=0,n=1)]
         else:
             direction = direction_to(unit.pos, target_ice_pos)
+            self.move_bot(direction, unit, game_state, actions)
+
+    def get_optimal_hit_pos(self,unit, unit_id, target_lichen_tiles, onboard_lichen_map):
+        """
+        Searches the full lichen map, and uses target tile memory to find the
+        next best target for the robot.
+        """
+        lichen_tile_distances_map = defaultdict(list)
+        lichen_tile_distances = np.mean((target_lichen_tiles - unit.pos) ** 2, 1)
+        closest_lichen_tile = target_lichen_tiles[np.argmin(lichen_tile_distances)]
+        target_lichen_pos = closest_lichen_tile #default to closest
+    
+        # If we already have a target, move towards it
+        # pp(f"{target_lichen_pos=}")
+        # pp(f"{onboard_lichen_map[tuple(target_lichen_pos)]=}")
+        if unit_id in self.attack_target_map:
+            
+            recorded_lichen_pos = self.attack_target_map[unit_id]
+            if onboard_lichen_map[tuple(recorded_lichen_pos)] > 0:
+                target_lichen_pos = recorded_lichen_pos
+                # pp(f"IF {target_lichen_pos=}")
+                # pp(f"IF {onboard_lichen_map[tuple(target_lichen_pos)]=}")
+            else:
+                del self.attack_target_map[unit_id]
+
+        if unit_id not in self.attack_target_map:
+            for lichen_tile in target_lichen_tiles:
+                lichen_dist = self.get_manhattan_distance(lichen_tile,unit.pos)
+                # print(f"{ice_dist=}, {ice_dist.shape=}",file=sys.stderr)
+                lichen_tile_distances_map[lichen_dist].append(lichen_tile)
+
+            sorted_distances = dict(sorted(lichen_tile_distances_map.items()))
+            # print(f"{sorted_distances=}",file=sys.stderr)
+            for lichen_dist, lichen_tile in sorted_distances.items():
+                target_tuple = tuple([lichen_tile[0][0],lichen_tile[0][1]])
+                if not target_tuple in self.attack_target_reverse_map:
+                    # Log target
+                    self.attack_target_map[unit_id] = target_tuple
+                    self.attack_target_reverse_map[target_tuple] = unit_id
+                    target_lichen_pos = target_tuple
+                    # pp(f"ELSE {target_lichen_pos=}")
+                    # pp(f"ELSE {onboard_lichen_map[tuple(target_lichen_pos)]=}")
+                    break
+                    
+        # print(f"{unit_id=}, {target_ice_pos=}",file=sys.stderr)
+        return target_lichen_pos        
+
+
+    def attack_lichen(self, unit_id, unit, target_lichen_tiles, actions, game_state):
+        onboard_lichen_map = game_state.board.lichen
+
+        target_lichen_pos = self.get_optimal_hit_pos(unit=unit, unit_id=unit_id, target_lichen_tiles=target_lichen_tiles, onboard_lichen_map=onboard_lichen_map)
+        # pp(f"Target lichen pos = {target_lichen_pos} lichen on it: {onboard_lichen_map[tuple(target_lichen_pos)]}")
+        if np.all(target_lichen_pos == unit.pos):
+            if len(unit.action_queue) == 0 and onboard_lichen_map[tuple(target_lichen_pos)] > 0:
+                # if unit.power >= unit.dig_cost(game_state) + unit.action_queue_cost(game_state):
+                repeats = math.ceil(onboard_lichen_map[tuple(target_lichen_pos)] / 10)
+                # pp(f"Lichen dig repeats = {repeats}")
+                actions[unit_id] = [unit.dig(repeat=repeats, n=1)]
+        else:
+            direction = direction_to(unit.pos, target_lichen_pos)
             self.move_bot(direction, unit, game_state, actions)
 
 
@@ -302,7 +382,9 @@ class Agent():
         HEAVY_CARGO_TARGET = 160
         LIGHT_CARGO_TARGET = 50
         LICHEN_PROD_STEPS = 200
-
+        # self.ATTACK_MODE = False
+        LICHEN_ATTACK_RADIUS = 3
+        AGGRESSION_DIVISOR = 1
         factory_tiles, factory_units = [], []
         for unit_id, factory in factories.items():
             # Try building heavy first. If not enough power, build light.
@@ -322,39 +404,58 @@ class Agent():
 
                 units = game_state.units[self.player]
                 opp_factories = game_state.factories[self.opp_player]
-                onboard_lichen_tiles = game_state.board.lichen 
+                onboard_lichen_map = game_state.board.lichen
 
-                target_lichen_tiles = []
-                for fac in opp_factories:
-                    for lichen in onboard_lichen_tiles:
-                        lic_fac_dis = self.get_manhattan_distance(lichen, fac.pos)
-                        # Todo: Make sure, these aren't our own lichen!!!
-                        if lic_fac_dis <= 3:
-                            target_lichen_tiles.append(lichen)
+                onboard_lichen_tiles = np.argwhere(onboard_lichen_map > 0)
 
-                light_units = dict() # unit_id, pos
-                for unit in units:
-                    if unit.unit_type=="LIGHT":
-                        light_units[unit.unit_id] = unit.pos
-                available_attack_bots = len(light_units) > len(opp_factories)
-                if available_attack_bots > 0:
-                    ATTACK_MODE = True
-                    self.bot_role["redbot"] = []
-                    light_keys = light_units.keys()
-                    for i in range(available_attack_bots):
-                        self.bot_role["redbot"].append(light_keys[i])
-                    self.bot_role["builder"] = []
-                    while i < len(light_units):
-                        self.bot_role["builder"].append(light_keys[i])
-                        i+=1
-                        
+                # print(f"{onboard_lichen_tiles=}",file=sys.stderr)
+                # print(f"{game_state.board.lichen_strains =}",file=sys.stderr)
+                # print(f"{factory.strain_id=}",file=sys.stderr)
+
+                if len(onboard_lichen_tiles) > 0:
+                    # Find targets
+                    target_lichen_tiles = []
+                    for fac_id, fac in opp_factories.items():
+                        fac_lichens = np.argwhere(game_state.board.lichen_strains == fac.strain_id)
+                        # target_lichen_tiles.extend(fac_lichens)
+                        # pp(f"{fac.strain_id=}")
+                        # pp(f"{fac_lichens[0][0:3]=}")
+                        # pp(f"{onboard_lichen_map[tuple(fac_lichens[0][0:3])]=}")
+                        # pp(f"{game_state.board.lichen_strains[tuple(fac_lichens[0][0:3])]=}")
+                        for lichen in fac_lichens:
+                            lic_fac_dis = self.get_manhattan_distance(lichen, fac.pos)
+                            if lic_fac_dis <= LICHEN_ATTACK_RADIUS:
+                                target_lichen_tiles.append(lichen)
+
+                    # Enlist kill bots
+                    light_units = dict() # unit_id, pos
+                    for unit_id, unit in units.items():
+                        if unit.unit_type == "LIGHT":
+                            light_units[unit_id] = unit.pos
+                    available_attack_bots = len(light_units) // AGGRESSION_DIVISOR
+                    # if available_attack_bots > 0 and 
+                    if len(target_lichen_tiles) > 0:
+                        self.ATTACK_MODE = True
+                        # print(f"boom {self.ATTACK_MODE=}",file=sys.stderr)
+                        # pp(f"{target_lichen_tiles=}")
+                        self.bot_role["redbot"] = []
+                        light_keys = list(light_units.keys())
+                        for i in range(available_attack_bots):
+                            self.bot_role["redbot"].append(light_keys[i])
+                        self.bot_role["builder"] = []
+                        for i in range(available_attack_bots,len(light_units)):
+                            self.bot_role["builder"].append(light_keys[i])
+                            i+=1
+                        # pp(f"{self.bot_role}")
+                else:
+                    self.ATTACK_MODE = False            
 
 
-                # # This code can be moved out from every action, into the setup phase
-                # my_factories = game_state.factories[self.player]
-                # my_lichen_strains = set()
-                # for factory in my_factories:
-                #     my_lichen_strains.add(factory["strain_id"])
+                    # # This code can be moved out from every action, into the setup phase
+                    # my_factories = game_state.factories[self.player]
+                    # my_lichen_strains = set()
+                    # for factory in my_factories:
+                    #     my_lichen_strains.add(factory["strain_id"])
                 
 
 
@@ -366,7 +467,8 @@ class Agent():
         ice_map = game_state.board.ice
         ice_tile_locations = np.argwhere(ice_map == 1)
         
-        red_bots = set(self.bot_role["redbot"])
+        red_bots = set(self.bot_role["redbot"]) if self.ATTACK_MODE else []
+        build_bots = set(self.bot_role["builder"]) if self.ATTACK_MODE else []
         for unit_id, unit in units.items():
             # track the closest factory
             closest_factory = None
@@ -386,15 +488,24 @@ class Agent():
 
                 elif unit.unit_type=="LIGHT": 
                     #print(f"Rubbles {game_state.board.rubble}", file=sys.stderr)
-                    if self.env_cfg.max_episode_length - game_state.real_env_steps > LICHEN_PROD_STEPS:
-                        self.dig_rubble(unit, closest_factory_tile, closest_factory, actions, game_state)
-                    else:
-                        if unit.cargo.ice < LIGHT_CARGO_TARGET:
-                            self.dig_ice(unit_id, unit, ice_tile_locations, actions, game_state)
-                        # else if we have enough ice, we go back to the factory and dump it.
-                        elif unit.cargo.ice >= LIGHT_CARGO_TARGET:
-                            self.dump_ice(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state)
+                    if self.ATTACK_MODE and unit.unit_id in red_bots:
+                        if unit.power > 10:
+                            self.attack_lichen(unit_id, unit, target_lichen_tiles, actions, game_state)
+                        else:
+                            self.fast_charge(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state)
+                    else:#if unit.unit_id in build_bots:
+                        # If there isn't enough ice in cargo, go dig.
+                        if self.env_cfg.max_episode_length - game_state.real_env_steps > LICHEN_PROD_STEPS:
+                            self.dig_rubble(unit, closest_factory_tile, closest_factory, actions, game_state)
+                        else:
+                            if unit.cargo.ice < LIGHT_CARGO_TARGET:
+                                self.dig_ice(unit_id, unit, ice_tile_locations, actions, game_state)
+                            # else if we have enough ice, we go back to the factory and dump it.
+                            elif unit.cargo.ice >= LIGHT_CARGO_TARGET:
+                                self.dump_ice(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state)
         return actions
+    
+
 
 
 """
