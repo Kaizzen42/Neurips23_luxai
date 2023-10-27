@@ -20,8 +20,7 @@ class Agent():
         self.mining_target_map = dict() # dict to map robot to its mining target
         self.mining_target_reverse_map = dict() # dict to map mining target tile to robot id
         self.total_original_water = 0
-        self.DROUGHT_STATE = False
-        self.DROUGHT_RECOVERY_COUNTER = 10
+        self.bot_role = dict()  # Every bot would be classified as miner/cleaner/redbot (enemy focussed)
 
     def no_collisions_next_step(self, current_pos, direction, game_state):
         """
@@ -138,7 +137,6 @@ class Agent():
         closest_ice_tile = ice_tile_locations[np.argmin(ice_tile_distances)]
         target_ice_pos = closest_ice_tile #default to closest
     
-
         # If we already have a target, move towards it
         if unit_id in self.mining_target_map:
             target_ice_pos = self.mining_target_map[unit_id]
@@ -319,6 +317,40 @@ class Agent():
             if self.env_cfg.max_episode_length - game_state.real_env_steps < LICHEN_PROD_STEPS:
                 if factory.water_cost(game_state) <= factory.cargo.water:
                     actions[unit_id] = factory.water()
+
+            # Halfway through the game, start checking on opponent
+            if self.env_cfg.max_episode_length - game_state.real_env_steps < 500: 
+                opp_team = game_state.teams.get(self.opp_player)
+
+                units = game_state.units[self.player]
+                opp_factories = game_state.factories[self.opp_player]
+                
+                onboard_lichen_tiles = game_state.board.lichen 
+
+                target_lichen_tiles = []
+                for fac in opp_factories:
+                    for lichen in onboard_lichen_tiles:
+                        lic_fac_dis = self.get_manhattan_distance(lichen, fac.pos)
+                        if lic_fac_dis <= 3:
+                            target_lichen_tiles.append(lichen)
+
+                light_units = dict() # unit_id, pos
+                for unit in units:
+                    if unit.unit_type=="LIGHT":
+                        light_units[unit.unit_id] = unit.pos
+                if len(light_units) > len(opp_factories):
+                    ATTACK_MODE = True
+                    
+
+
+                # # This code can be moved out from every action, into the setup phase
+                # my_factories = game_state.factories[self.player]
+                # my_lichen_strains = set()
+                # for factory in my_factories:
+                #     my_lichen_strains.add(factory["strain_id"])
+                
+
+
             factory_tiles += [factory.pos]
             factory_units += [factory]
         factory_tiles = np.array(factory_tiles)
@@ -355,3 +387,15 @@ class Agent():
                         elif unit.cargo.ice >= LIGHT_CARGO_TARGET:
                             self.dump_ice(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state)
         return actions
+
+
+"""
+Attack mode
+
+Destroy enemy lichen farms. 
+
+1. Detect that enemy has started growing Lichen.
+2. Take n = #enemy factory light bots, and fully charge them - mark as kill bots. [bot role map]
+3. Detect target lichen location: closer to the enemy factory, the better. [lichen target map]
+4. Dispatch kill bots to target locations. 
+"""
