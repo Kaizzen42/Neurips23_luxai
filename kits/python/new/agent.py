@@ -137,22 +137,22 @@ class Agent():
             # pp(f"{table=}")
             # spawn_arr = np.array(table)
 
-            sorted_indices = np.lexsort((-table[:,3], table[:,2])) 
-            # sorted_indices = np.lexsort((table[:,3], table[:,2])) # for min distance
+            # sorted_indices = np.lexsort((-table[:,3], table[:,2])) 
+            sorted_indices = np.lexsort((table[:,3], table[:,2])) # for min distance
             # pp(f"{sorted_indices=}")
             table = table[sorted_indices]
             # pp(f"{table[0]=}")
             ice_prox_rows = table[np.argwhere(table[:,2] == np.min(table[:,2]))]
             # pp(f"Selected top {len(ice_prox_rows)} rows: {ice_prox_rows=} ")
             # pp(f"Shapes: {table.shape=}, {ice_prox_rows.shape=}")
-            if len(ice_prox_rows) > 1:
-                ice_prox_rows = ice_prox_rows.squeeze() # random middle dimension added above; removing. 
-            else:
-                ice_prox_rows = ice_prox_rows.reshape(1,4)
+            # if ice_prox_rows.ndim > 2:
+            #     ice_prox_rows = ice_prox_rows.squeeze() # random middle dimension added above; removing. 
+            # else:
+            ice_prox_rows = ice_prox_rows.reshape(-1,4)
             # pp(f"Shapes: {table.shape=}, {ice_prox_rows.shape=}")
-            far_fac_rows = ice_prox_rows[np.argwhere(ice_prox_rows[:,3] == np.max(ice_prox_rows[:,3]))]
+            # far_fac_rows = ice_prox_rows[np.argwhere(ice_prox_rows[:,3] == np.max(ice_prox_rows[:,3]))]
             # for min distance
-            # far_fac_rows = ice_prox_rows[np.argwhere(ice_prox_rows[:,3] == np.min(ice_prox_rows[:,3]))]
+            far_fac_rows = ice_prox_rows[np.argwhere(ice_prox_rows[:,3] == np.min(ice_prox_rows[:,3]))]
             # pp(f"Selected top fac {len(far_fac_rows)} rows: {far_fac_rows=} ")
 
             best_spawn_choice = tuple([int(far_fac_rows[0,0,0]), int(far_fac_rows[0,0,1])])
