@@ -29,7 +29,7 @@ class Agent():
         self.attack_target_reverse_map = dict() 
         self.ATTACK_MODE = False # Turned on when ready to attack opponent lichens.
 
-    def no_collisions_next_step(self, current_pos, direction, game_state):
+    def no_collisions_next_step(self, current_pos, unit, direction, game_state):
         """
         Determines if its safe to move to the next tile without collisions.
         Get positions of all robots from both teams.
@@ -38,7 +38,7 @@ class Agent():
         Else return True.
         """
         target_pos = current_pos + move_deltas[direction]
-
+        unit_type = unit.unit_type
         my_robots = game_state.units[self.player]
         op_robots = game_state.units[self.opp_player]
         for robot_id, robot in my_robots.items():
@@ -49,8 +49,12 @@ class Agent():
                 return False
         for robot_id, robot in op_robots.items():
             next_pos = self.get_next_queue_position(robot, robot.action_queue)
-            if next_pos[0] == target_pos[0] and next_pos[1] == target_pos[1]:
-                return False
+            if unit_type=="HEAVY" and robot.unit_type=="LIGHT":
+                if next_pos[0] == target_pos[0] and next_pos[1] == target_pos[1]:
+                    return True
+            else:    
+                if next_pos[0] == target_pos[0] and next_pos[1] == target_pos[1]:
+                    return False
         return True
 
     def move_bot(self, direction, unit, game_state, actions):
@@ -60,7 +64,7 @@ class Agent():
         """
         move_cost = unit.move_cost(game_state, direction)
         if move_cost is not None and unit.power >= move_cost + unit.action_queue_cost(game_state):
-            if self.no_collisions_next_step(unit.pos, direction, game_state):
+            if self.no_collisions_next_step(unit.pos,unit, direction, game_state):
                 actions[unit.unit_id] = [unit.move(direction, repeat=0, n=1)]
             else:
                 # Lets move in one of the orthogonal directions.
@@ -71,33 +75,73 @@ class Agent():
                     other_dirs.remove(opposite_dir)
 
                 random_other_direction = random.choice(other_dirs)
-                if self.no_collisions_next_step(unit.pos, random_other_direction, game_state):
+                if self.no_collisions_next_step(unit.pos, unit, random_other_direction, game_state):
                     actions[unit.unit_id] = [unit.move(random_other_direction, repeat=0, n=1)]
                 else: # try moving opposite to the orthogonal direction
-                    if self.no_collisions_next_step(unit.pos, opposite_directions[random_other_direction], game_state):
+                    if self.no_collisions_next_step(unit.pos, unit, opposite_directions[random_other_direction], game_state):
                         actions[unit.unit_id] = [unit.move(opposite_directions[random_other_direction], repeat=0, n=1)]
                     # else: # Don't move
                     #     actions[unit.unit_id] = [unit.recharge(0, repeat=0, n=1)]
 
     def place_factory(self, obs, game_state, metal_per_factory, water_per_factory):
         potential_spawns = np.array(list(zip(*np.where(obs["board"]["valid_spawns_mask"] == 1))))
+        current_factories = game_state.factories[self.player]
+        current_fac_locations = []
+        for unit_id, fac in current_factories.items():
+            current_fac_locations.append(tuple(fac.pos))
 
-        # First modification: lets spawn near ice.
         ice_map = game_state.board.ice
         ice_tile_locations = np.argwhere(ice_map == 1)
 
-        # print(f"INFO SHAACH Ice Tile locations: {ice_tile_locations}", file=sys.stderr)
+        if len(current_fac_locations) >= 1:
+            # pp(f"{len(potential_spawns)=}")
+            table = np.empty((0,4))
+            for spawn_choice in potential_spawns:
+                ice_tile_distances = np.mean((ice_tile_locations - spawn_choice) ** 2, 1)
+                closest_ice_tile = ice_tile_locations[np.argmin(ice_tile_distances)]
+                fac_distances = np.mean((current_fac_locations - closest_ice_tile) ** 2, 1)
+                mean_fact_dist = np.mean(fac_distances)
+                # pp(f"{spawn_choice=}")
+                # pp(f"{spawn_choice[0]=}, { np.min(ice_tile_distances)=}, {mean_fact_dist=}")
+                row = [spawn_choice[0], spawn_choice[1], np.min(ice_tile_distances), mean_fact_dist]
+                row = [int(x) for x in row]
+                new_row = np.array([spawn_choice[0], spawn_choice[1], np.min(ice_tile_distances), mean_fact_dist])
+                new_row = new_row.reshape(1, -1)
+                # pp(f"shapes: {table.shape=}, {new_row.shape=}")
+                table = np.concatenate((table, new_row), axis=0)
+            
+            # pp(f"{table=}")
+            # spawn_arr = np.array(table)
 
-        min_ice_dist = float(math.inf)
-        best_spawn_choice = potential_spawns[np.random.randint(0, len(potential_spawns))]
-        for spawn_choice in potential_spawns:
-            ice_tile_distances = np.mean((ice_tile_locations - spawn_choice) ** 2, 1)
-            # closest_ice_tile = ice_tile_locations[np.argmin(ice_tile_distances)]
-            closest_ice_tile_dist = min(ice_tile_distances)
-            if closest_ice_tile_dist <= min_ice_dist:
-                best_spawn_choice = spawn_choice
-                min_ice_dist = closest_ice_tile_dist
-        # spawn_loc = potential_spawns[np.random.randint(0, len(potential_spawns))]
+            sorted_indices = np.lexsort((-table[:,3], table[:,2])) 
+            # pp(f"{sorted_indices=}")
+            table = table[sorted_indices]
+            # pp(f"{table[0]=}")
+            ice_prox_rows = table[np.argwhere(table[:,2] == np.min(table[:,2]))]
+            # pp(f"Selected top {len(ice_prox_rows)} rows: {ice_prox_rows=} ")
+            # pp(f"Shapes: {table.shape=}, {ice_prox_rows.shape=}")
+            ice_prox_rows = ice_prox_rows.squeeze() # random middle dimension added above; removing. 
+            # pp(f"Shapes: {table.shape=}, {ice_prox_rows.shape=}")
+            far_fac_rows = ice_prox_rows[np.argwhere(ice_prox_rows[:,3] == np.max(ice_prox_rows[:,3]))]
+            # pp(f"Selected top fac {len(far_fac_rows)} rows: {far_fac_rows=} ")
+
+            best_spawn_choice = tuple([int(far_fac_rows[0,0,0]), int(far_fac_rows[0,0,1])])
+            # pp(f"{best_spawn_choice=}")
+            # First modification: lets spawn near ice.
+
+
+            # print(f"INFO SHAACH Ice Tile locations: {ice_tile_locations}", file=sys.stderr)
+        else:
+            min_ice_dist = float(math.inf)
+            best_spawn_choice = potential_spawns[np.random.randint(0, len(potential_spawns))]
+            for spawn_choice in potential_spawns:
+                ice_tile_distances = np.mean((ice_tile_locations - spawn_choice) ** 2, 1)
+                min_ice_tile_dist = min(ice_tile_distances)
+                # closest_ice_tile = ice_tile_locations[np.argmin(ice_tile_distances)]
+                closest_ice_tile_dist = min(ice_tile_distances)
+                if closest_ice_tile_dist <= min_ice_dist:
+                    best_spawn_choice = spawn_choice
+                    min_ice_dist = closest_ice_tile_dist
         spawn_loc = best_spawn_choice
         return dict(spawn=spawn_loc, metal=metal_per_factory, water=water_per_factory)
     
@@ -383,8 +427,10 @@ class Agent():
         LIGHT_CARGO_TARGET = 50
         LICHEN_PROD_STEPS = 200
         # self.ATTACK_MODE = False
-        LICHEN_ATTACK_RADIUS = 3
-        AGGRESSION_DIVISOR = 1
+        LICHEN_ATTACK_RADIUS = 4
+        AGGRESSION_DIVISOR = 1  #max aggressive = 1, least = #light bots
+        WATER_GONE_TOL = 1.00 # 10% tolerance for pred vs actual
+
         factory_tiles, factory_units = [], []
         for unit_id, factory in factories.items():
             # Try building heavy first. If not enough power, build light.
@@ -398,6 +444,16 @@ class Agent():
             if self.env_cfg.max_episode_length - game_state.real_env_steps < LICHEN_PROD_STEPS:
                 if factory.water_cost(game_state) <= factory.cargo.water:
                     actions[unit_id] = factory.water()
+            # if  game_state.real_env_steps > LICHEN_PROD_STEPS: 
+            #     remaining_turns = self.env_cfg.max_episode_length - game_state.real_env_steps
+            #     factory_total_water_production = game_state.real_env_steps - 150
+            #     water_pred_end_game = factory.cargo.water + \
+            #                             (remaining_turns * factory_total_water_production / game_state.real_env_steps) - \
+            #                             (remaining_turns + 1) * factory.water_cost(game_state) * WATER_GONE_TOL
+            #     pp(f"{unit_id=} {water_pred_end_game=}")
+            #     if water_pred_end_game > 0:
+            #         # if factory.water_cost(game_state) <= factory.cargo.water:
+            #             actions[unit_id] = factory.water()
 
             # Halfway through the game, start checking on opponent
             if self.env_cfg.max_episode_length - game_state.real_env_steps < 500: 
@@ -449,15 +505,6 @@ class Agent():
                         # pp(f"{self.bot_role}")
                 else:
                     self.ATTACK_MODE = False            
-
-
-                    # # This code can be moved out from every action, into the setup phase
-                    # my_factories = game_state.factories[self.player]
-                    # my_lichen_strains = set()
-                    # for factory in my_factories:
-                    #     my_lichen_strains.add(factory["strain_id"])
-                
-
 
             factory_tiles += [factory.pos]
             factory_units += [factory]
