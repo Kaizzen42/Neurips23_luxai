@@ -49,9 +49,16 @@ class Agent():
                 return False
         for robot_id, robot in op_robots.items():
             next_pos = self.get_next_queue_position(robot, robot.action_queue)
-            if unit_type=="HEAVY" and robot.unit_type=="LIGHT":
-                if next_pos[0] == target_pos[0] and next_pos[1] == target_pos[1]:
-                    return True
+            if unit_type=="HEAVY":
+                if robot.unit_type=="LIGHT":
+                    if next_pos[0] == target_pos[0] and next_pos[1] == target_pos[1]:
+                        return True
+                else:
+                    if robot.power < unit.power:
+                        if next_pos[0] == target_pos[0] and next_pos[1] == target_pos[1]:
+                            return True
+
+
             else:    
                 if next_pos[0] == target_pos[0] and next_pos[1] == target_pos[1]:
                     return False
@@ -82,10 +89,28 @@ class Agent():
                         actions[unit.unit_id] = [unit.move(opposite_directions[random_other_direction], repeat=0, n=1)]
                     # else: # Don't move
                     #     actions[unit.unit_id] = [unit.recharge(0, repeat=0, n=1)]
+        elif move_cost is None: # TODO: clean up w/ upper else.
+            # Lets move in one of the orthogonal directions.
+            other_dirs = [0,1,2,3,4]
+            other_dirs.remove(direction)
+            opposite_dir = opposite_directions[direction]
+            if opposite_dir != 0:
+                other_dirs.remove(opposite_dir)
+
+            random_other_direction = random.choice(other_dirs)
+            if self.no_collisions_next_step(unit.pos, unit, random_other_direction, game_state):
+                actions[unit.unit_id] = [unit.move(random_other_direction, repeat=0, n=1)]
+            else: # try moving opposite to the orthogonal direction
+                if self.no_collisions_next_step(unit.pos, unit, opposite_directions[random_other_direction], game_state):
+                    actions[unit.unit_id] = [unit.move(opposite_directions[random_other_direction], repeat=0, n=1)]
+                # else: # Don't move
+                #     actions[unit.unit_id] = [unit.recharge(0, repeat=0, n=1)]
+        else:
+            pp(f"{unit.unit_id} couldn't move. {move_cost=}, {unit.action_queue_cost(game_state)=}")
 
     def place_factory(self, obs, game_state, metal_per_factory, water_per_factory):
         potential_spawns = np.array(list(zip(*np.where(obs["board"]["valid_spawns_mask"] == 1))))
-        current_factories = game_state.factories[self.player]
+        current_factories = game_state.factories[self.opp_player]
         current_fac_locations = []
         for unit_id, fac in current_factories.items():
             current_fac_locations.append(tuple(fac.pos))
@@ -105,8 +130,7 @@ class Agent():
                 # pp(f"{spawn_choice[0]=}, { np.min(ice_tile_distances)=}, {mean_fact_dist=}")
                 row = [spawn_choice[0], spawn_choice[1], np.min(ice_tile_distances), mean_fact_dist]
                 row = [int(x) for x in row]
-                new_row = np.array([spawn_choice[0], spawn_choice[1], np.min(ice_tile_distances), mean_fact_dist])
-                new_row = new_row.reshape(1, -1)
+                new_row = np.array(row).reshape(1, -1)
                 # pp(f"shapes: {table.shape=}, {new_row.shape=}")
                 table = np.concatenate((table, new_row), axis=0)
             
@@ -114,15 +138,21 @@ class Agent():
             # spawn_arr = np.array(table)
 
             sorted_indices = np.lexsort((-table[:,3], table[:,2])) 
+            # sorted_indices = np.lexsort((table[:,3], table[:,2])) # for min distance
             # pp(f"{sorted_indices=}")
             table = table[sorted_indices]
             # pp(f"{table[0]=}")
             ice_prox_rows = table[np.argwhere(table[:,2] == np.min(table[:,2]))]
             # pp(f"Selected top {len(ice_prox_rows)} rows: {ice_prox_rows=} ")
             # pp(f"Shapes: {table.shape=}, {ice_prox_rows.shape=}")
-            ice_prox_rows = ice_prox_rows.squeeze() # random middle dimension added above; removing. 
+            if len(ice_prox_rows) > 1:
+                ice_prox_rows = ice_prox_rows.squeeze() # random middle dimension added above; removing. 
+            else:
+                ice_prox_rows = ice_prox_rows.reshape(1,4)
             # pp(f"Shapes: {table.shape=}, {ice_prox_rows.shape=}")
             far_fac_rows = ice_prox_rows[np.argwhere(ice_prox_rows[:,3] == np.max(ice_prox_rows[:,3]))]
+            # for min distance
+            # far_fac_rows = ice_prox_rows[np.argwhere(ice_prox_rows[:,3] == np.min(ice_prox_rows[:,3]))]
             # pp(f"Selected top fac {len(far_fac_rows)} rows: {far_fac_rows=} ")
 
             best_spawn_choice = tuple([int(far_fac_rows[0,0,0]), int(far_fac_rows[0,0,1])])
@@ -237,6 +267,7 @@ class Agent():
 
     def dig_ice(self, unit_id, unit, ice_tile_locations, actions, game_state):
         target_ice_pos = self.get_optimal_ice_pos(unit=unit, unit_id=unit_id, ice_tile_locations=ice_tile_locations)
+        direction = direction_to(unit.pos, target_ice_pos)
         if np.all(target_ice_pos == unit.pos):
             if len(unit.action_queue) == 0:
                 if unit.power >= unit.dig_cost(game_state) + unit.action_queue_cost(game_state):
@@ -244,7 +275,6 @@ class Agent():
                 else:
                     pass #actions[unit_id] = [unit.recharge(x=100,repeat=0,n=1)]
         else:
-            direction = direction_to(unit.pos, target_ice_pos)
             self.move_bot(direction, unit, game_state, actions)
 
     def get_optimal_hit_pos(self,unit, unit_id, target_lichen_tiles, onboard_lichen_map):
@@ -295,17 +325,25 @@ class Agent():
 
     def attack_lichen(self, unit_id, unit, target_lichen_tiles, actions, game_state):
         onboard_lichen_map = game_state.board.lichen
-
-        target_lichen_pos = self.get_optimal_hit_pos(unit=unit, unit_id=unit_id, target_lichen_tiles=target_lichen_tiles, onboard_lichen_map=onboard_lichen_map)
-        # pp(f"Target lichen pos = {target_lichen_pos} lichen on it: {onboard_lichen_map[tuple(target_lichen_pos)]}")
+        # if game_state.real_env_steps == 902:
+        #     i=0
+        #     for row in onboard_lichen_map:
+        #         pp(f"{i}{row}")
+        #         i+=1
+        target_lichen_pos = self.get_optimal_hit_pos(unit=unit, unit_id=unit_id, 
+                                                     target_lichen_tiles=target_lichen_tiles,
+                                                     onboard_lichen_map=onboard_lichen_map)
+        # if onboard_lichen_map[tuple(target_lichen_pos)] <= 0:
+        #     pp(f"ALERT! Bad target assigned to {unit_id=}")
+        direction = direction_to(unit.pos, target_lichen_pos)
+        # pp(f"Target lichen pos = {target_lichen_pos} lichen on it: {onboard_lichen_map[tuple(target_lichen_pos)]} {unit_id=}, {direction=}")
         if np.all(target_lichen_pos == unit.pos):
-            if len(unit.action_queue) == 0 and onboard_lichen_map[tuple(target_lichen_pos)] > 0:
+            if len(unit.action_queue) == 0:# and onboard_lichen_map[tuple(target_lichen_pos)] > 0:
                 # if unit.power >= unit.dig_cost(game_state) + unit.action_queue_cost(game_state):
                 repeats = math.ceil(onboard_lichen_map[tuple(target_lichen_pos)] / 10)
                 # pp(f"Lichen dig repeats = {repeats}")
                 actions[unit_id] = [unit.dig(repeat=repeats, n=1)]
         else:
-            direction = direction_to(unit.pos, target_lichen_pos)
             self.move_bot(direction, unit, game_state, actions)
 
 
@@ -425,9 +463,9 @@ class Agent():
         
         HEAVY_CARGO_TARGET = 160
         LIGHT_CARGO_TARGET = 50
-        LICHEN_PROD_STEPS = 200
+        LICHEN_PROD_STEPS = 800
         # self.ATTACK_MODE = False
-        LICHEN_ATTACK_RADIUS = 4
+        LICHEN_ATTACK_RADIUS = 64 #full board
         AGGRESSION_DIVISOR = 1  #max aggressive = 1, least = #light bots
         WATER_GONE_TOL = 1.00 # 10% tolerance for pred vs actual
 
@@ -441,19 +479,19 @@ class Agent():
             factory.cargo.metal >= self.env_cfg.ROBOTS["LIGHT"].METAL_COST:
                 actions[unit_id] = factory.build_light()
             # Lichen
-            if self.env_cfg.max_episode_length - game_state.real_env_steps < LICHEN_PROD_STEPS:
-                if factory.water_cost(game_state) <= factory.cargo.water:
-                    actions[unit_id] = factory.water()
-            # if  game_state.real_env_steps > LICHEN_PROD_STEPS: 
-            #     remaining_turns = self.env_cfg.max_episode_length - game_state.real_env_steps
-            #     factory_total_water_production = game_state.real_env_steps - 150
-            #     water_pred_end_game = factory.cargo.water + \
-            #                             (remaining_turns * factory_total_water_production / game_state.real_env_steps) - \
-            #                             (remaining_turns + 1) * factory.water_cost(game_state) * WATER_GONE_TOL
-            #     pp(f"{unit_id=} {water_pred_end_game=}")
-            #     if water_pred_end_game > 0:
-            #         # if factory.water_cost(game_state) <= factory.cargo.water:
-            #             actions[unit_id] = factory.water()
+            # if self.env_cfg.max_episode_length - game_state.real_env_steps < LICHEN_PROD_STEPS:
+            #     if factory.water_cost(game_state) <= factory.cargo.water:
+            #         actions[unit_id] = factory.water()
+            if  game_state.real_env_steps > LICHEN_PROD_STEPS: 
+                remaining_turns = self.env_cfg.max_episode_length - game_state.real_env_steps
+                factory_total_water_production = game_state.real_env_steps - 150
+                water_pred_end_game = factory.cargo.water + \
+                                        (remaining_turns * factory_total_water_production / game_state.real_env_steps) - \
+                                        (remaining_turns + 1) * factory.water_cost(game_state) * WATER_GONE_TOL
+                pp(f"{unit_id=} {water_pred_end_game=}")
+                if water_pred_end_game > 0:
+                    # if factory.water_cost(game_state) <= factory.cargo.water:
+                        actions[unit_id] = factory.water()
 
             # Halfway through the game, start checking on opponent
             if self.env_cfg.max_episode_length - game_state.real_env_steps < 500: 
@@ -504,7 +542,7 @@ class Agent():
                             i+=1
                         # pp(f"{self.bot_role}")
                 else:
-                    self.ATTACK_MODE = False            
+                    self.ATTACK_MODE = False  
 
             factory_tiles += [factory.pos]
             factory_units += [factory]
@@ -535,21 +573,21 @@ class Agent():
 
                 elif unit.unit_type=="LIGHT": 
                     #print(f"Rubbles {game_state.board.rubble}", file=sys.stderr)
-                    if self.ATTACK_MODE and unit.unit_id in red_bots:
-                        if unit.power > 10:
+                    if self.ATTACK_MODE:# and unit.unit_id in red_bots:
+                        if unit.power > 10: # Todo: fix - bot can get stuck around 10, aiming alternately for if/else tiles.
                             self.attack_lichen(unit_id, unit, target_lichen_tiles, actions, game_state)
                         else:
                             self.fast_charge(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state)
                     else:#if unit.unit_id in build_bots:
                         # If there isn't enough ice in cargo, go dig.
-                        if self.env_cfg.max_episode_length - game_state.real_env_steps > LICHEN_PROD_STEPS:
-                            self.dig_rubble(unit, closest_factory_tile, closest_factory, actions, game_state)
-                        else:
-                            if unit.cargo.ice < LIGHT_CARGO_TARGET:
-                                self.dig_ice(unit_id, unit, ice_tile_locations, actions, game_state)
-                            # else if we have enough ice, we go back to the factory and dump it.
-                            elif unit.cargo.ice >= LIGHT_CARGO_TARGET:
-                                self.dump_ice(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state)
+                        # if self.env_cfg.max_episode_length - game_state.real_env_steps > LICHEN_PROD_STEPS:
+                        self.dig_rubble(unit, closest_factory_tile, closest_factory, actions, game_state)
+                        # else:
+                        #     if unit.cargo.ice < LIGHT_CARGO_TARGET:
+                        #         self.dig_ice(unit_id, unit, ice_tile_locations, actions, game_state)
+                        #     # else if we have enough ice, we go back to the factory and dump it.
+                        #     elif unit.cargo.ice >= LIGHT_CARGO_TARGET:
+                        #         self.dump_ice(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state)
         return actions
     
 
