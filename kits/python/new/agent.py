@@ -4,6 +4,7 @@ import numpy as np
 import math, random
 from collections import defaultdict
 import sys
+import re
 
 move_deltas = np.array([[0, 0], [0, -1], [1, 0], [0, 1], [-1, 0]])
 opposite_directions = {1:3,3:1,2:4,4:2,0:0}
@@ -21,8 +22,10 @@ class Agent():
         self.planned_factories_to_place = 0
         self.metal_per_factory = 150
         self.water_per_factory = 150
-        self.mining_target_map = dict() # dict to map robot to its mining target
-        self.mining_target_reverse_map = dict() # dict to map mining target tile to robot id
+        self.ice_mining_target_map = dict() # dict to map robot to its mining target
+        self.ice_mining_target_reverse_map = dict() # dict to map mining target tile to robot id
+        self.ore_mining_target_map = dict() # dict to map robot to its mining target
+        self.ore_mining_target_reverse_map = dict() # dict to map mining target tile to robot id
         self.total_original_water = 0
         self.bot_role = dict()  # Every bot would be classified as miner/cleaner/redbot (enemy focussed)
         self.attack_target_map = dict() # maps redbot to target tile
@@ -218,8 +221,8 @@ class Agent():
         target_ice_pos = closest_ice_tile #default to closest
     
         # If we already have a target, move towards it
-        if unit_id in self.mining_target_map:
-            target_ice_pos = self.mining_target_map[unit_id]
+        if unit_id in self.ice_mining_target_map:
+            target_ice_pos = self.ice_mining_target_map[unit_id]
         else:
             for ice_tile in ice_tile_locations:
                 ice_dist = self.get_manhattan_distance(ice_tile,unit.pos)
@@ -230,10 +233,10 @@ class Agent():
             # print(f"{sorted_distances=}",file=sys.stderr)
             for ice_dist, ice_tile in sorted_distances.items():
                 target_tuple = tuple([ice_tile[0][0],ice_tile[0][1]])
-                if not target_tuple in self.mining_target_reverse_map:
+                if not target_tuple in self.ice_mining_target_reverse_map:
                     # Log target
-                    self.mining_target_map[unit_id] = target_tuple
-                    self.mining_target_reverse_map[target_tuple] = unit_id
+                    self.ice_mining_target_map[unit_id] = target_tuple
+                    self.ice_mining_target_reverse_map[target_tuple] = unit_id
                     target_ice_pos = target_tuple
                     break
                     
@@ -245,6 +248,8 @@ class Agent():
         direction = direction_to(unit.pos, closest_factory_tile)
         if adjacent_to_factory:
             if unit.power >= unit.action_queue_cost(game_state):
+                pp(f"ICE DUMP ACTION: {direction=},{unit.cargo.ice=}")
+
                 actions[unit_id] = [unit.transfer(direction, 0, unit.cargo.ice, repeat=0, n=1),
                                      unit.pickup(4, 
                                                  min(closest_factory.power, 
@@ -274,6 +279,63 @@ class Agent():
                     actions[unit_id] = [unit.dig(repeat=10, n=1)]
                 else:
                     pass #actions[unit_id] = [unit.recharge(x=100,repeat=0,n=1)]
+        else:
+            self.move_bot(direction, unit, game_state, actions)
+
+    def get_optimal_ore_pos(self, unit_id, unit, ore_tile_locations):
+        """
+        Searches the full ore map, and uses target tile memory to find the
+        next best target for the robot.
+        """
+        ore_tile_distances_map = defaultdict(list)
+        ore_tile_distances = np.mean((ore_tile_locations - unit.pos) ** 2, 1)
+        closest_ore_tile = ore_tile_locations[np.argmin(ore_tile_distances)]
+        target_ore_pos = closest_ore_tile #default to closest
+    
+        # If we already have a target, move towards it
+        if unit_id in self.ore_mining_target_map:
+            target_ore_pos = self.ore_mining_target_map[unit_id]
+        else:
+            for ore_tile in ore_tile_locations:
+                ore_dist = self.get_manhattan_distance(ore_tile,unit.pos)
+                # print(f"{ice_dist=}, {ice_dist.shape=}",file=sys.stderr)
+                ore_tile_distances_map[ore_dist].append(ore_tile)
+
+            sorted_distances = dict(sorted(ore_tile_distances_map.items()))
+            # print(f"{sorted_distances=}",file=sys.stderr)
+            for ore_dist, ore_tile in sorted_distances.items():
+                target_tuple = tuple([ore_tile[0][0],ore_tile[0][1]])
+                if not target_tuple in self.ore_mining_target_reverse_map:
+                    # Log target
+                    self.ore_mining_target_map[unit_id] = target_tuple
+                    self.ore_mining_target_reverse_map[target_tuple] = unit_id
+                    target_ore_pos = target_tuple
+                    break
+        # print(f"{unit_id=}, {target_ice_pos=}",file=sys.stderr)
+        return target_ore_pos
+    
+    def dump_ore(self, unit_id, unit, closest_factory_tile, closest_factory, actions, game_state):
+        adjacent_to_factory = np.mean((closest_factory_tile - unit.pos) ** 2) <= 1
+        direction = direction_to(unit.pos, closest_factory_tile)
+        if adjacent_to_factory:
+            if unit.power >= unit.action_queue_cost(game_state) and unit_id not in actions:
+                # resource type (0 = ice, 1 = ore, 2 = water, 3 = metal, 4 power)
+                # pp(f"ORE DUMP ACTION: {direction=},{unit.cargo.ore=}")
+                actions[unit_id] = [unit.transfer(direction, 1, unit.cargo.ore, repeat=0, n=1),
+                                     unit.pickup(4, 
+                                                 min(closest_factory.power, 
+                                                     unit.unit_cfg.BATTERY_CAPACITY - unit.power), 
+                                                 repeat=0, n=1)]
+        else:
+            self.move_bot(direction, unit, game_state, actions)    
+
+    def dig_ore(self, unit_id, unit, ore_tile_locations, actions, game_state):
+        target_ore_pos = self.get_optimal_ore_pos(unit=unit, unit_id=unit_id, ore_tile_locations=ore_tile_locations)
+        direction = direction_to(unit.pos, target_ore_pos)
+        if np.all(target_ore_pos == unit.pos):
+            if len(unit.action_queue) == 0:
+                if unit.power >= unit.dig_cost(game_state) + unit.action_queue_cost(game_state):
+                    actions[unit_id] = [unit.dig(repeat=10, n=1)]
         else:
             self.move_bot(direction, unit, game_state, actions)
 
@@ -462,8 +524,8 @@ class Agent():
         game_state.teams[self.player].place_first
         
         HEAVY_CARGO_TARGET = 160
-        LIGHT_CARGO_TARGET = 50
-        LICHEN_PROD_STEPS = 800
+        LIGHT_CARGO_TARGET = 100
+        LICHEN_PROD_STEPS = 700
         # self.ATTACK_MODE = False
         LICHEN_ATTACK_RADIUS = 64 #full board
         AGGRESSION_DIVISOR = 1  #max aggressive = 1, least = #light bots
@@ -551,6 +613,8 @@ class Agent():
         units = game_state.units[self.player]
         ice_map = game_state.board.ice
         ice_tile_locations = np.argwhere(ice_map == 1)
+        ore_map = game_state.board.ore
+        ore_tile_locations = np.argwhere(ore_map == 1)
         
         red_bots = set(self.bot_role["redbot"]) if self.ATTACK_MODE else []
         build_bots = set(self.bot_role["builder"]) if self.ATTACK_MODE else []
@@ -573,21 +637,33 @@ class Agent():
 
                 elif unit.unit_type=="LIGHT": 
                     #print(f"Rubbles {game_state.board.rubble}", file=sys.stderr)
-                    if self.ATTACK_MODE:# and unit.unit_id in red_bots:
-                        if unit.power > 10: # Todo: fix - bot can get stuck around 10, aiming alternately for if/else tiles.
-                            self.attack_lichen(unit_id, unit, target_lichen_tiles, actions, game_state)
+                    if self.ATTACK_MODE and len(target_lichen_tiles) > 0:# and unit.unit_id in red_bots:
+                        if unit.cargo.ore > 0:
+                            self.dump_ore(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state)
                         else:
-                            self.fast_charge(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state)
+                            if unit.power > 10: # Todo: fix - bot can get stuck around 10, aiming alternately for if/else tiles.
+                                self.attack_lichen(unit_id, unit, target_lichen_tiles, actions, game_state)
+                            else:
+                                self.fast_charge(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state)
                     else:#if unit.unit_id in build_bots:
-                        # If there isn't enough ice in cargo, go dig.
-                        # if self.env_cfg.max_episode_length - game_state.real_env_steps > LICHEN_PROD_STEPS:
-                        self.dig_rubble(unit, closest_factory_tile, closest_factory, actions, game_state)
-                        # else:
-                        #     if unit.cargo.ice < LIGHT_CARGO_TARGET:
-                        #         self.dig_ice(unit_id, unit, ice_tile_locations, actions, game_state)
-                        #     # else if we have enough ice, we go back to the factory and dump it.
-                        #     elif unit.cargo.ice >= LIGHT_CARGO_TARGET:
-                        #         self.dump_ice(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state)
+                        # if game_state.real_env_steps < 250:
+                        if int(re.findall(r'\d+',unit_id)[0])%2 == 0:
+                            if unit.cargo.ore > 0:
+                                self.dump_ore(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state) 
+                            else:
+                                self.dig_rubble(unit, closest_factory_tile, closest_factory, actions, game_state)
+                        else:
+                            if unit.cargo.ore < LIGHT_CARGO_TARGET:
+                                self.dig_ore(unit_id, unit, ore_tile_locations, actions, game_state)
+                            # else if we have enough ice, we go back to the factory and dump it.
+                            elif unit.cargo.ore >= LIGHT_CARGO_TARGET:
+                                self.dump_ore(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state)
+                        # else: # First focus on building more bots
+                        #         if unit.cargo.ore < LIGHT_CARGO_TARGET:
+                        #             self.dig_ore(unit_id, unit, ore_tile_locations, actions, game_state)
+                        #         # else if we have enough ice, we go back to the factory and dump it.
+                        #         elif unit.cargo.ore >= LIGHT_CARGO_TARGET:
+                        #             self.dump_ore(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state)
         return actions
     
 
