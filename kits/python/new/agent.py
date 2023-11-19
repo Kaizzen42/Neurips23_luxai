@@ -5,13 +5,14 @@ import math, random
 from collections import defaultdict
 import sys
 import re
+import networkx as nx
 
 move_deltas = np.array([[0, 0], [0, -1], [1, 0], [0, 1], [-1, 0]])
 opposite_directions = {1:3,3:1,2:4,4:2,0:0}
 
 
-def pp(strp):
-    return print(strp,file=sys.stderr)
+def pp(strp,sep='\n'):
+    return print(strp,sep=sep,file=sys.stderr)
 
 class Agent():
     def __init__(self, player: str, env_cfg: EnvConfig) -> None:
@@ -31,6 +32,13 @@ class Agent():
         self.attack_target_map = dict() # maps redbot to target tile
         self.attack_target_reverse_map = dict() 
         self.ATTACK_MODE = False # Turned on when ready to attack opponent lichens.
+        self.rsc_pths = dict() # key = (factory_tile, resource_tile), value = [steps]
+        """
+        1. Generate k optimal paths (distance wise) from src to dest.
+        2. Weigh them by rubble on them, and find the most optimal path.
+        3. Sent dig bots to clear the path.
+        4. Build elastic logic (reeled back when energy < return_energy)
+        """
 
     def no_collisions_next_step(self, current_pos, unit, direction, game_state):
         """
@@ -109,7 +117,8 @@ class Agent():
                 # else: # Don't move
                 #     actions[unit.unit_id] = [unit.recharge(0, repeat=0, n=1)]
         else:
-            pp(f"{unit.unit_id} couldn't move. {move_cost=}, {unit.action_queue_cost(game_state)=}")
+            # pp(f"{unit.unit_id} couldn't move. {move_cost=}, {unit.action_queue_cost(game_state)=}")
+            pass
 
     def place_factory(self, obs, game_state, metal_per_factory, water_per_factory):
         potential_spawns = np.array(list(zip(*np.where(obs["board"]["valid_spawns_mask"] == 1))))
@@ -248,7 +257,7 @@ class Agent():
         direction = direction_to(unit.pos, closest_factory_tile)
         if adjacent_to_factory:
             if unit.power >= unit.action_queue_cost(game_state):
-                pp(f"ICE DUMP ACTION: {direction=},{unit.cargo.ice=}")
+                # pp(f"ICE DUMP ACTION: {direction=},{unit.cargo.ice=}")
 
                 actions[unit_id] = [unit.transfer(direction, 0, unit.cargo.ice, repeat=0, n=1),
                                      unit.pickup(4, 
@@ -515,6 +524,106 @@ class Agent():
                 direction = direction_to(unit.pos, closest_factory_tile)
                 self.move_bot(direction, unit, game_state, actions)
 
+    def build_graph(self, game_state):
+        """
+        Let factory tiles, and resource tiles have infinite weight, so the 
+        robot skips over those.
+
+        """
+        board = game_state.board.rubble
+        opp_factories = game_state.factories[self.opp_player]
+        ice_tiles = np.argwhere(game_state.board.ice==1)
+        pp(f"{ice_tiles=}")
+        for (i,j) in ice_tiles:
+                board[i][j] = 9999
+        def get_full_fac(pos):
+            fac = []
+            for i in range(pos[0]-1,pos[0]+2):
+                for j in range(pos[1]-1,pos[1]+2):
+                    fac.append((i,j))
+            return fac
+
+        for unit_id, unit in opp_factories.items():
+            # pp(f"FAC {unit.pos=}")
+            full_fac = get_full_fac(unit.pos)
+            # pp(f"FAC full = {full_fac}")
+            for (i,j) in full_fac:
+                board[i][j] = 9999
+
+        # for row in range(0,board.shape[0]):
+        #     # for col in range(0, board.shape[1]):
+        #     #     pp(f"{board[row][col]} ",sep =' ')
+        #     pp(f"{board[row]}")
+
+        adj_mat = np.zeros((4096,4096))
+
+        def get_news(i):
+            north = None if i<=63 else i-64
+            south = None if i>=4032 else i+64
+            east = None if i%64==63 else i+1
+            west = None if i%64==0 else i-1
+            return north, south, east, west
+        for i in range(4096):
+            north, south, east, west = get_news(i)
+            if north or north == 0:
+                adj_mat[i][north] = 9999 if i<=63 else  max(board[i//64 - 1][i%64], 1)
+            if south or south == 0:
+                adj_mat[i][south] = 9999 if i>=4032 else max(board[i//64 + 1][i%64], 1)
+            if east or east == 0: 
+                adj_mat[i][east] = 9999 if i%64==63 else max(board[i//64][i%64+1], 1)
+            if west or west == 0:
+                adj_mat[i][west] = 9999 if i%64==0 else max(board[i//64][i%64-1], 1)
+            if i == 4095 or i == 4031:
+                pp(f"{i=}")
+                pp(f"{north=},{south=},{east=},{west=}")
+                if north or north == 0:
+                    pp(f"{adj_mat[i][north]=}")
+                if south or south == 0:
+                    pp(f"{adj_mat[i][south]=}")
+                if east or east == 0:
+                    pp(f"{adj_mat[i][east]=}")
+                if west or west == 0:
+                    pp(f"{adj_mat[i][west]=}")
+        pp(f"{board[62]=}")
+        pp(f"{board[63]=}")
+        # pp(f"{adj_mat[0][0]=}, {adj_mat[0][1]=}, {adj_mat[0][64]=}")
+        # pp(f"{adj_mat[1][0]=}, {adj_mat[1][2]=}, {adj_mat[1][65]=}")
+        # pp(f"{adj_mat[64]=}")
+        # pp(f"{adj_mat[4032]=}")
+        # pp(f"{adj_mat[4095]=}")
+
+        G = nx.from_numpy_array(adj_mat,edge_attr="weight")
+        pp(f"{type(G.edges(data=True))=}")
+        pp(f"{dir(G.edges(data=True))=}")
+        pp(f"{G.number_of_nodes()=}")
+        pp(f"All edges with key 0:{[(i, j)   for i, j in G.edges if i == 0]}")
+        pp(f"All nodes connected to edges with key 0: {set( [n for i, j in G.edges if i == 0  for n in [j]] )}")
+        pp(f"All edges with key 1:{[(i, j)   for i, j in G.edges if i == 1]}")
+        pp(f"All nodes connected to edges with key 1: {set( [n for i, j in G.edges if i == 1  for n in [j]] )}")
+        pp(f"All edges with key 4095:{[(i, j)   for i, j in G.edges if i == 4095]}")
+        pp(f"All nodes connected to edges with key 4095: {set( [n for i, j in G.edges if i == 4095  for n in [j]] )}")
+        pp(f"All edges with key 4096:{[(i, j)   for i, j in G.edges if i == 4096]}")
+        pp(f"All nodes connected to edges with key 4096: {set( [n for i, j in G.edges if i == 4096  for n in [j]] )}")
+        return G
+
+    def generate_path(self, G, src, dest):
+        pp(f"Looking for a path from {src} to {dest}")
+        start = src[0] * 64 + src[1]%64
+        stop = dest[0] * 64 + dest[1]%64
+
+        pp(f"All edges with key {start}:{[(i, j)   for i, j in G.edges if i == start]}")
+        pp(f"All nodes connected to edges with key {start}: {set( [n for i, j in G.edges if i == start  for n in [j]] )}")
+        
+        pp(f"All edges with key {stop}:{[(i, j)   for i, j in G.edges if i == stop]}")
+        pp(f"All nodes connected to edges with key {stop}: {set( [n for i, j in G.edges if i == stop  for n in [j]] )}")
+
+
+
+        path = nx.shortest_path(G, start, stop, weight="weight")
+        tile_path = [(p//64, p%64) for p in path]
+        pp(f"Path from {src} ({start}) to {dest} ({stop}) = {path}")
+        pp(f"Path from {src} ({start}) to {dest} ({stop}) = {tile_path}")
+        return tile_path
 
     def act(self, step: int, obs, remainingOverageTime: int = 60):
         
@@ -531,8 +640,19 @@ class Agent():
         AGGRESSION_DIVISOR = 1  #max aggressive = 1, least = #light bots
         WATER_GONE_TOL = 1.00 # 10% tolerance for pred vs actual
 
+        if game_state.real_env_steps == 1:
+            pp(f"Build graph, steps = {game_state.real_env_steps}")
+            G = self.build_graph(game_state=game_state)
+            
         factory_tiles, factory_units = [], []
         for unit_id, factory in factories.items():
+            if game_state.real_env_steps == 1:
+                ore_map = game_state.board.ore
+                ore_tile_locations = np.argwhere(ore_map == 1)
+                ore_tile_distances = np.mean((ore_tile_locations - factory.pos) ** 2, 1)
+                closest_ore_tile = ore_tile_locations[np.argmin(ore_tile_distances)]
+                self.generate_path(G, tuple(factory.pos),tuple(closest_ore_tile))
+
             # Try building heavy first. If not enough power, build light.
             if factory.power >= self.env_cfg.ROBOTS["HEAVY"].POWER_COST and \
             factory.cargo.metal >= self.env_cfg.ROBOTS["HEAVY"].METAL_COST:
@@ -550,7 +670,7 @@ class Agent():
                 water_pred_end_game = factory.cargo.water + \
                                         (remaining_turns * factory_total_water_production / game_state.real_env_steps) - \
                                         (remaining_turns + 1) * factory.water_cost(game_state) * WATER_GONE_TOL
-                pp(f"{unit_id=} {water_pred_end_game=}")
+                # pp(f"{unit_id=} {water_pred_end_game=}")
                 if water_pred_end_game > 0:
                     # if factory.water_cost(game_state) <= factory.cargo.water:
                         actions[unit_id] = factory.water()
@@ -647,7 +767,7 @@ class Agent():
                                 self.fast_charge(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state)
                     else:#if unit.unit_id in build_bots:
                         # if game_state.real_env_steps < 250:
-                        if int(re.findall(r'\d+',unit_id)[0])%2 == 0:
+                        if int(re.findall(r'\d+',unit_id)[0])%3 == 0:
                             if unit.cargo.ore > 0:
                                 self.dump_ore(unit_id, unit, closest_factory_tile, closest_factory, actions, game_state) 
                             else:
